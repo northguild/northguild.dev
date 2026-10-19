@@ -33,10 +33,11 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Smoke test
-        # The first deploy creates the certificate, which takes a few minutes: retry for up to 5.
+        # The first deploy creates the DNS record and certificate, which take a few minutes: retry for
+        # up to 5. Actions runs bash with -e, and curl exits non-zero until the host resolves.
         run: |
-          set -u
-          code() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
+          set +e -u
+          code() { curl -s -o /dev/null -w '%{http_code}' "$1" || true; }
           for i in $(seq 1 20); do
             root=$(code https://northguild.dev/)
             api=$(code https://northguild.dev/api/x)
