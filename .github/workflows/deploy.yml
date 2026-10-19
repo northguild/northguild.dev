@@ -1,0 +1,47 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - uses: cloudflare/wrangler-action@v4
+        with:
+          workingDirectory: apps/site
+          wranglerVersion: "4.126.0"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test
+        # The first deploy creates the certificate, which takes a few minutes: retry for up to 5.
+        run: |
+          set -u
+          code() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
+          for i in $(seq 1 20); do
+            root=$(code https://northguild.dev/)
+            api=$(code https://northguild.dev/api/x)
+            echo "try $i: / -> $root, /api/x -> $api"
+            [ "$root" = 200 ] && [ "$api" = 404 ] && exit 0
+            sleep 15
+          done
+          exit 1

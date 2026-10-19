@@ -1,0 +1,10 @@
+{
+  "name": "northguild-site",
+  "compatibility_date": "2026-08-26",
+  // Assets only: no Worker script.
+  "assets": { "directory": "./dist", "not_found_handling": "404-page" },
+  // The apex. Cloudflare creates the DNS record and certificate. Dox's Route northguild.dev/gmt*
+  // takes precedence over this Custom Domain for its paths.
+  "routes": [{ "pattern": "northguild.dev", "custom_domain": true }],
+  "workers_dev": false,
+}

@@ -1,0 +1,21 @@
+{
+  "name": "northguild.dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "check": "pnpm -r check",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.2",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.32.1"
+}

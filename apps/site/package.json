@@ -1,0 +1,21 @@
+{
+  "name": "@northguild/site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "check": "astro check",
+    "preview": "wrangler dev"
+  },
+  "dependencies": {
+    "@northguild/theme": "workspace:*",
+    "astro": "7.2.7"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "typescript": "5.9.3",
+    "wrangler": "4.126.0"
+  }
+}

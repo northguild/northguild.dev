@@ -1,0 +1,39 @@
+---
+import Base from "../layouts/Base.astro";
+import RepoCard from "../components/RepoCard.astro";
+
+// Descriptions are each package's own `package.json` `description`, verbatim.
+const repos = [
+  {
+    name: "GMT",
+    description:
+      "Temporal-based date and time utilities with timezone support and polyfill integration",
+    docsHref: "https://northguild.dev/gmt/",
+    githubHref: "https://github.com/northguild/gmt",
+  },
+  {
+    name: "worktree",
+    description:
+      "A CLI tool for managing git worktrees with enhanced workflow features",
+    docsHref: "https://northguild.github.io/worktree/docs/getting-started",
+    githubHref: "https://github.com/northguild/worktree",
+  },
+];
+---
+
+<Base title="NorthGuild">
+  <h1>NorthGuild</h1>
+  <p class="intro">Open-source tools for developers, built in the open.</p>
+  <div class="grid">
+    {repos.map((r) => <RepoCard {...r} />)}
+  </div>
+</Base>
+
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+</style>

@@ -1,0 +1,53 @@
+---
+interface Props {
+  name: string;
+  description: string;
+  docsHref: string;
+  githubHref: string;
+}
+const { name, description, docsHref, githubHref } = Astro.props;
+---
+
+<article class="gmt-glass repo-card">
+  <h2>{name}</h2>
+  <p>{description}</p>
+  <div class="links">
+    <a class="gmt-button gmt-sonar-focus" href={docsHref}>Docs</a>
+    <a class="gmt-button gmt-sonar-focus" href={githubHref}>GitHub</a>
+  </div>
+</article>
+
+<style>
+  /* A full border on all four sides; it brightens as a whole. */
+  .repo-card {
+    border: 1px solid var(--gmt-border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    transition: border-color var(--gmt-duration-fast) var(--gmt-easing);
+  }
+  .repo-card:hover,
+  .repo-card:focus-within {
+    border-color: var(--gmt-border-strong);
+  }
+  h2 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+  p {
+    margin: 0;
+    flex: 1;
+    color: var(--gmt-ice-dim);
+  }
+  .links {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .gmt-button {
+    display: inline-block;
+    padding: 0.4rem 1rem;
+    text-decoration: none;
+    color: var(--gmt-ice);
+  }
+</style>

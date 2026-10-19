@@ -1,0 +1,23 @@
+{
+  "name": "@northguild/theme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NorthGuild design tokens and CSS primitives (CSS only).",
+  "files": [
+    "tokens.css",
+    "tokens-light.css",
+    "primitives.css",
+    "fonts"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "exports": {
+    "./tokens.css": "./tokens.css",
+    "./tokens-light.css": "./tokens-light.css",
+    "./primitives.css": "./primitives.css",
+    "./fonts/*": "./fonts/*",
+    "./package.json": "./package.json"
+  }
+}

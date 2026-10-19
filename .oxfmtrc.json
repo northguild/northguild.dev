@@ -1,0 +1,14 @@
+{
+  "singleQuote": false,
+  "printWidth": 80,
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.astro/**",
+    "**/.wrangler/**",
+    "**/*.css",
+    "**/*.md",
+    "**/*.yaml",
+    "pnpm-lock.yaml"
+  ]
+}

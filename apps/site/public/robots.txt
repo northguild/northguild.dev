@@ -1,0 +1,7 @@
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+Allow: /
+Disallow: /api/
+Disallow: /mcp/
+
+Sitemap: https://northguild.dev/gmt/sitemap-index.xml
