@@ -1,6 +1,6 @@
-// Places the sky can be seen from. The page picks one per visit (or the
-// visitor switches in the info popover) and passes its index to the worker;
-// the popover shows the same site's details. Plain data only: the page's own
+// Places the sky can be seen from. The worker picks one per visit from the
+// browser's time zone (or at random) and the visitor can switch in the info
+// popover; the popover shows the same site's details. Plain data only: the page's own
 // script and scripts/build-skyline.mjs both import this.
 
 /** One aurora curtain: its ground distance north and the x range it spans. */
@@ -48,6 +48,8 @@ export type Site = {
   lights: number;
   /** Credits for the data behind this site's skyline. */
   credits: [string, string][];
+  /** Browser time zones that start a visit at this site. */
+  zones: string[];
 };
 
 const COPERNICUS: [string, string] = [
@@ -84,6 +86,7 @@ export const SITES: Site[] = [
     buildings: false,
     lights: 0,
     credits: [COPERNICUS],
+    zones: ["Atlantic/Reykjavik"],
   },
   {
     id: "helsinki",
@@ -109,6 +112,7 @@ export const SITES: Site[] = [
     buildings: true,
     lights: 1,
     credits: [COPERNICUS, OSM],
+    zones: ["Europe/Helsinki", "Europe/Mariehamn"],
   },
 ];
 

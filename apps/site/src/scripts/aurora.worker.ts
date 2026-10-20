@@ -21,7 +21,7 @@ import {
   STAR_VS,
   skyFs,
 } from "./aurora.shaders";
-import { getUnixNow } from "@northguild/gmt/unix";
+import { getSystemTimeZone, getUnixNow } from "@northguild/gmt";
 import { MOON } from "./aurora.moon";
 import { SITES } from "./aurora.sites";
 import { columns, sky, type Sky } from "./aurora.sky";
@@ -55,7 +55,7 @@ export type AuroraMessage =
       width: number;
       height: number;
       colours: string[];
-      /** Index into SITES, chosen by the page. */
+      /** Index into SITES, or -1 to pick from the browser's time zone. */
       site: number;
       still: boolean;
       hidden: boolean;
@@ -65,10 +65,20 @@ export type AuroraMessage =
   | { type: "still"; still: boolean }
   | { type: "hidden"; hidden: boolean };
 
+/** To the page: the frame is up ("on"), we gave up ("off"), or the site drawn. */
+export type WorkerMessage = "on" | "off" | { site: number };
+
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<AuroraMessage>) => void) | null;
-  postMessage(message: "on" | "off"): void;
+  postMessage(message: WorkerMessage): void;
 };
+
+/** The site for this browser's time zone (via gmt), else one at random. */
+function siteForTimeZone(): number {
+  const zone = getSystemTimeZone();
+  const match = SITES.findIndex((s) => s.zones.includes(zone));
+  return match >= 0 ? match : Math.floor(Math.random() * SITES.length);
+}
 
 const nextFrame =
   "requestAnimationFrame" in self
@@ -300,15 +310,20 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let tilt = [0, 0];
   let cam = new Float32Array(9);
   let tanY = 1;
-  const place = (index: number) => {
-    site = SITES[index] ?? SITES[0]!;
-    // Field lines climb toward magnetic south at the site's dip.
-    const south = (180 + site.decl) * RAD;
-    const lean = 1 / Math.tan(site.dip * RAD);
-    tilt = [lean * Math.sin(south), lean * Math.cos(south)];
-    // Camera basis as columns (right, up, forward), heading from north.
+  // Camera basis as columns (right, up, forward), heading from north. On a
+  // portrait screen the page's cards cover the middle, so the view widens and
+  // tilts until the horizon sits about a third of the way down: the aurora then
+  // shows above the cards and the land or water below them.
+  const aim = () => {
+    const aspect = (width || 1) / (height || 1);
+    const portrait = Math.min(1, Math.max(0, (1 - aspect) / 0.45));
+    const fov = (site.fov + 15 * portrait) * RAD;
+    tanY = Math.tan(fov / 2);
+    const landscape =
+      -Math.tan(site.pitch * RAD) / Math.tan((site.fov / 2) * RAD);
+    const horizon = landscape + (0.3 - landscape) * portrait;
+    const pitch = Math.atan(-horizon * tanY);
     const yaw = site.heading * RAD;
-    const pitch = site.pitch * RAD;
     const fwd = [
       Math.sin(yaw) * Math.cos(pitch),
       Math.sin(pitch),
@@ -322,21 +337,29 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       fwd[0] * right[1] - fwd[1] * right[0],
       ...fwd,
     ]);
-    tanY = Math.tan((site.fov / 2) * RAD);
+  };
+  const place = (index: number) => {
+    site = SITES[index] ?? SITES[0]!;
+    // Field lines climb toward magnetic south at the site's dip.
+    const south = (180 + site.decl) * RAD;
+    const lean = 1 / Math.tan(site.dip * RAD);
+    tilt = [lean * Math.sin(south), lean * Math.cos(south)];
+    aim();
     const skyline = SKYLINES[site.id];
     const mesh = skyline ? ridgeMesh(skyline) : new Float32Array(0);
     gl.bindBuffer(gl.ARRAY_BUFFER, ridgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
     ridgeCount = mesh.length / 4;
   };
-  place(init.site);
+  let width = init.width;
+  let height = init.height;
+  place(init.site < 0 ? siteForTimeZone() : init.site);
+  scope.postMessage({ site: SITES.indexOf(site) });
 
   // Quality levels: 0 full, 1 lower resolution and fewer sky steps, 2 also
   // half the sparks, 3 stopped.
   let level = 0;
   let sparkCount = SPARKS;
-  let width = init.width;
-  let height = init.height;
   let still = init.still;
   let hidden = init.hidden;
   let t = 120;
@@ -355,6 +378,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       Math.min(BASE_SCALE, MAX_EDGE / Math.max(w, h)) * (level ? 0.7 : 1);
     canvas.width = Math.round(w * scale);
     canvas.height = Math.round(h * scale);
+    aim();
   };
 
   const quad = (program: WebGLProgram) => {
