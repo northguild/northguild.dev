@@ -17,8 +17,11 @@ import { join } from "node:path";
 import { fromFile } from "geotiff";
 import { SITES } from "../apps/site/src/scripts/aurora.sites.ts";
 
-const SPAN = 100; // degrees either side of the camera heading
-const AZ_STEP = 0.2;
+// Degrees either side of the camera heading, and the azimuth step. City
+// sites are sampled finer so a dome a few tenths of a degree wide keeps its
+// shape; their wider views need less span.
+const spanFor = (site) => (site.buildings ? 75 : 100);
+const stepFor = (site) => (site.buildings ? 0.05 : 0.2);
 const FAR = 80_000;
 const BUILDINGS_FAR = 12_000; // OSM buildings beyond this are below a pixel
 const LAND = 1.5; // metres above sea level that count as land, not water
@@ -62,33 +65,111 @@ async function load(tile) {
   };
 }
 
-/** OSM building footprints with a height, cached per bounding box. */
+const OVERPASS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+
+async function overpass(query) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const url = OVERPASS[attempt % OVERPASS.length];
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "User-Agent": "northguild-skyline/1.0" },
+        body: new URLSearchParams({ data: query }),
+      });
+      const text = await res.text();
+      if (res.ok && text.startsWith("{")) return text;
+      console.warn(`overpass ${url}: HTTP ${res.status}, retrying`);
+    } catch (error) {
+      console.warn(`overpass ${url}: ${error.message}, retrying`);
+    }
+    await new Promise((done) => setTimeout(done, 5000 * 2 ** attempt));
+  }
+  throw new Error("overpass: no server answered");
+}
+
+const num = (v) => Number.parseFloat(v);
+
+/**
+ * OSM buildings and building parts (Simple 3D Buildings) with height, roof
+ * height and roof shape, cached per bounding box.
+ */
 async function osmBuildings([south, west, north, east]) {
-  const file = join(cache, `osm-${south}-${west}-${north}-${east}.json`);
+  const file = join(cache, `osm3d-${south}-${west}-${north}-${east}.json`);
   if (!existsSync(file)) {
-    const query = `[out:json][timeout:120];(way["building"](${south},${west},${north},${east}););out tags geom;`;
-    const res = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: { "User-Agent": "northguild-skyline/1.0" },
-      body: new URLSearchParams({ data: query }),
-    });
-    if (!res.ok) throw new Error(`overpass: HTTP ${res.status}`);
-    writeFileSync(file, await res.text());
+    const box = `(${south},${west},${north},${east})`;
+    writeFileSync(
+      file,
+      await overpass(
+        `[out:json][timeout:180];(way["building"]${box};way["building:part"]${box};);out tags geom;`,
+      ),
+    );
   }
   const { elements } = JSON.parse(readFileSync(file, "utf8"));
   return elements
-    .filter((e) => e.geometry?.length)
+    .filter((e) => e.geometry?.length > 2)
     .map((e) => {
       const t = e.tags ?? {};
-      const levels = Number.parseFloat(t["building:levels"]);
-      const height =
-        Number.parseFloat(t.height) ||
-        (Number.isFinite(levels) ? levels * 3.2 + 1 : 10);
-      return { height, points: e.geometry };
+      const levels = num(t["building:levels"]);
+      const roofLevels = num(t["roof:levels"]);
+      const roofFromLevels = Number.isFinite(roofLevels) ? roofLevels * 3.2 : 0;
+      // In Simple 3D Buildings `height` is to the top of the roof.
+      let height = num(t.height);
+      if (!Number.isFinite(height)) {
+        height = Number.isFinite(levels)
+          ? levels * 3.2 + 1 + roofFromLevels
+          : 10;
+      }
+      let roof = num(t["roof:height"]);
+      if (!Number.isFinite(roof)) roof = roofFromLevels;
+      return {
+        part: "building:part" in t,
+        height,
+        roof: Math.min(Math.max(roof, 0), height),
+        shape: t["roof:shape"] ?? "flat",
+        points: e.geometry,
+      };
     });
 }
 
+/** Roof profile across its width, u from -1 to 1: 1 at the full height. */
+function roofProfile(shape, u) {
+  const a = Math.min(1, Math.abs(u));
+  switch (shape) {
+    case "dome":
+    case "round":
+      return Math.sqrt(1 - a * a);
+    case "onion":
+      return 0.8 * Math.sqrt(1 - a * a) + 0.2 * Math.max(0, 1 - 4 * a);
+    case "cone":
+    case "pyramidal":
+      return 1 - a;
+    case "flat":
+      return 1;
+    default:
+      // Gabled, hipped and the rest: the side seen depends on orientation.
+      return 0.6;
+  }
+}
+
+/** Whether point [x, y] is inside polygon pts (local metres). */
+function inside([x, y], pts) {
+  let hit = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+      hit = !hit;
+    }
+  }
+  return hit;
+}
+
 async function build(site) {
+  const SPAN = spanFor(site);
+  const AZ_STEP = stepFor(site);
   const latRad = site.lat / DEG;
   const dLat = (FAR / R_EARTH) * DEG;
   const dLon = dLat / Math.cos(latRad);
@@ -173,25 +254,78 @@ async function build(site) {
       site.lat + 0.11,
       site.lon + 0.22,
     ].map((v) => Math.round(v * 1000) / 1000);
-    const buildings = await osmBuildings(box);
+    const all = (await osmBuildings(box)).map((b) => ({
+      ...b,
+      local: b.points.map((p) => toLocal(p.lat, p.lon)),
+    }));
+    const parts = all.filter((b) => b.part);
+    // Where a building is modelled in parts, draw the parts, not its outline.
+    const centres = parts.map(({ local }) => [
+      local.reduce((sum, [x]) => sum + x, 0) / local.length,
+      local.reduce((sum, [, y]) => sum + y, 0) / local.length,
+    ]);
+    const GRID = 200;
+    const cell = ([x, y]) => `${Math.floor(x / GRID)},${Math.floor(y / GRID)}`;
+    const byCell = new Map();
+    centres.forEach((c) => {
+      const key = cell(c);
+      byCell.set(key, [...(byCell.get(key) ?? []), c]);
+    });
+    const hasParts = (local) => {
+      const xs = local.map(([x]) => x);
+      const ys = local.map(([, y]) => y);
+      for (
+        let gx = Math.floor(Math.min(...xs) / GRID);
+        gx <= Math.floor(Math.max(...xs) / GRID);
+        gx++
+      ) {
+        for (
+          let gy = Math.floor(Math.min(...ys) / GRID);
+          gy <= Math.floor(Math.max(...ys) / GRID);
+          gy++
+        ) {
+          for (const c of byCell.get(`${gx},${gy}`) ?? [])
+            if (inside(c, local)) return true;
+        }
+      }
+      return false;
+    };
+    const shapes = [
+      ...parts,
+      ...all.filter((b) => !b.part && !hasParts(b.local)),
+    ];
     let used = 0;
-    for (const { height: tall, points } of buildings) {
-      const local = points.map((p) => toLocal(p.lat, p.lon));
-      const dists = local.map(([x, y]) => Math.hypot(x, y));
-      const r = Math.min(...dists);
+    for (const { height: tall, roof, shape, points, local } of shapes) {
+      const r = Math.min(...local.map(([x, y]) => Math.hypot(x, y)));
       if (r < 50 || r > BUILDINGS_FAR) continue;
       // Ground under the building: the lowest surface-model value at its corners.
       const ground = Math.min(...points.map((p) => height(p.lat, p.lon)));
-      const angle = angleTo(ground + tall, r);
       const azs = local.map(([x, y]) => Math.atan2(x, y) * DEG);
       const lo = Math.min(...azs);
       const hi = Math.max(...azs);
       if (hi - lo > 90) continue; // straddles the bearing behind the viewer
+      const mid = (lo + hi) / 2;
+      const half = Math.max((hi - lo) / 2, 1e-6);
+      const first = Math.max(0, Math.ceil((lo - from) / AZ_STEP));
+      const last = Math.min(count - 1, Math.floor((hi - from) / AZ_STEP));
+      // A part narrower than one step still marks its nearest bin.
+      const bins =
+        first <= last
+          ? [first, last]
+          : [
+              Math.round((mid - from) / AZ_STEP),
+              Math.round((mid - from) / AZ_STEP),
+            ];
       for (
-        let i = Math.max(0, Math.ceil((lo - from) / AZ_STEP));
-        i <= Math.min(count - 1, Math.floor((hi - from) / AZ_STEP));
+        let i = Math.max(0, bins[0]);
+        i <= Math.min(count - 1, bins[1]);
         i++
       ) {
+        const u = (from + i * AZ_STEP - mid) / half;
+        const angle = angleTo(
+          ground + tall - roof + roof * roofProfile(shape, u),
+          r,
+        );
         if (angle > best[i]) {
           best[i] = angle;
           bestR[i] = r;
@@ -200,7 +334,7 @@ async function build(site) {
       used++;
     }
     console.log(
-      `${site.id}: ${used} OSM buildings within ${BUILDINGS_FAR / 1000} km`,
+      `${site.id}: ${used} OSM buildings and parts within ${BUILDINGS_FAR / 1000} km (${parts.length} parts)`,
     );
   }
 
