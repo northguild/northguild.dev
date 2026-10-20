@@ -50,6 +50,8 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
+  /* Follow the bevel too, or the hairline draws round corners outside it. */
+  corner-shape: inherit;
   padding: 1px;
   background: linear-gradient(
     135deg,

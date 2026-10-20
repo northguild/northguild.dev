@@ -1,0 +1,307 @@
+---
+import {
+  SITES,
+  SKY_CREDITS,
+  compass,
+  coords,
+} from "../scripts/aurora.sites";
+---
+
+<div class="aurora" aria-hidden="true">
+  <canvas></canvas>
+</div>
+
+<!-- A faint info glyph, shown once the sky is running. It opens the details
+     and credits for whichever site this visit drew. -->
+<button
+  class="sky-info-button gmt-icon-button gmt-sonar-focus"
+  type="button"
+  popovertarget="sky-info"
+  aria-label="About this sky"
+  hidden
+>
+  <svg
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.6"
+    stroke-linecap="round"
+  >
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M12 11v5.5M12 7.75v.01"></path>
+  </svg>
+</button>
+<div id="sky-info" class="sky-info gmt-glass" popover>
+  <div class="sky-sites" role="group" aria-label="Seen from">
+    {
+      SITES.map((site, i) => (
+        <button
+          class="gmt-button gmt-sonar-focus"
+          type="button"
+          data-index={i}
+          aria-pressed={i === 0 ? "true" : "false"}
+        >
+          {site.name}
+        </button>
+      ))
+    }
+  </div>
+  {
+    SITES.map((site, i) => (
+      <section data-site={site.id} hidden={i !== 0}>
+        <p class="place">
+          {site.name}, {site.country}
+        </p>
+        <p>
+          Looking {compass(site.heading)} from {site.spot}.{" "}
+          {coords(site.lat, site.lon)}, eye height {site.eye}&nbsp;m.
+        </p>
+        <p>
+          The stars, moon and {site.ground} are real and show this moment.
+          The aurora is simulated.
+        </p>
+        <dl>
+          {site.credits.map(([what, source]) => (
+            <>
+              <dt>{what}</dt>
+              <dd>{source}</dd>
+            </>
+          ))}
+        </dl>
+      </section>
+    ))
+  }
+  <dl>
+    {
+      SKY_CREDITS.map(([what, source]) => (
+        <>
+          <dt>{what}</dt>
+          <dd>{source}</dd>
+        </>
+      ))
+    }
+  </dl>
+</div>
+
+<script>
+  import type { AuroraMessage, WorkerMessage } from "../scripts/aurora.worker";
+
+  // Order matches what the worker destructures.
+  const TOKENS = [
+    "--gmt-void",
+    "--gmt-spring",
+    "--gmt-cyan",
+    "--gmt-teal",
+    "--gmt-dst-purple",
+    "--gmt-ice",
+  ];
+
+  // The worker picks the first site from the browser's time zone (Finland:
+  // Helsinki, Iceland: Ísafjörður, else at random) and reports it; the
+  // visitor can switch in the popover, which always shows the site drawn.
+  let site = 0;
+  const sections = [
+    ...document.querySelectorAll<HTMLElement>("#sky-info [data-site]"),
+  ];
+  const choices = [
+    ...document.querySelectorAll<HTMLButtonElement>(".sky-sites button"),
+  ];
+  const show = () => {
+    sections.forEach((el, i) => (el.hidden = i !== site));
+    choices.forEach((button, i) =>
+      button.setAttribute("aria-pressed", String(i === site)),
+    );
+  };
+  show();
+  const info = document.querySelector<HTMLButtonElement>(".sky-info-button");
+  let post: ((message: AuroraMessage) => void) | null = null;
+
+  // All WebGL runs in the worker. Without OffscreenCanvas the CSS gradient
+  // stays, so the main thread never pays for the effect.
+  const canvas = document.querySelector<HTMLCanvasElement>(".aurora canvas");
+  if (canvas && "transferControlToOffscreen" in canvas) {
+    const go = () => {
+      const worker = new Worker(
+        new URL("../scripts/aurora.worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      const send = (message: AuroraMessage, transfer: Transferable[] = []) =>
+        worker.postMessage(message, transfer);
+      post = send;
+      const motion = matchMedia("(prefers-reduced-motion: reduce)");
+      const style = getComputedStyle(document.documentElement);
+      const offscreen = canvas.transferControlToOffscreen();
+      send(
+        {
+          type: "init",
+          canvas: offscreen,
+          width: canvas.clientWidth,
+          height: canvas.clientHeight,
+          colours: TOKENS.map((name) => style.getPropertyValue(name).trim()),
+          site: -1,
+          still: motion.matches,
+          hidden: document.hidden,
+        },
+        [offscreen],
+      );
+      worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
+        if (typeof data === "object") {
+          site = data.site;
+          show();
+          return;
+        }
+        const on = data === "on";
+        canvas.classList.toggle("on", on);
+        if (info) info.hidden = !on;
+      };
+      motion.addEventListener("change", () =>
+        send({ type: "still", still: motion.matches }),
+      );
+      document.addEventListener("visibilitychange", () =>
+        send({ type: "hidden", hidden: document.hidden }),
+      );
+      let timer = 0;
+      new ResizeObserver(() => {
+        clearTimeout(timer);
+        timer = window.setTimeout(
+          () =>
+            send({
+              type: "size",
+              width: canvas.clientWidth,
+              height: canvas.clientHeight,
+            }),
+          150,
+        );
+      }).observe(canvas);
+    };
+    if ("requestIdleCallback" in window) {
+      requestIdleCallback(go, { timeout: 1500 });
+    } else {
+      setTimeout(go, 200);
+    }
+  }
+
+  // Switching site: fade the sky out, swap, and fade back in when the worker
+  // reports the new frame is up.
+  choices.forEach((button, i) =>
+    button.addEventListener("click", () => {
+      if (i === site) return;
+      site = i;
+      show();
+      if (!post || !canvas) return;
+      canvas.classList.add("quick");
+      canvas.classList.remove("on");
+      window.setTimeout(() => post?.({ type: "site", site }), 400);
+    }),
+  );
+</script>
+
+<style>
+  /* The gradient is the first paint and the fallback when WebGL is off,
+     motion is reduced to a static frame, or the GPU cannot keep up. */
+  .aurora {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    contain: strict;
+    background:
+      radial-gradient(
+        120% 55% at 30% 0%,
+        color(from var(--gmt-dst-purple) srgb r g b / 0.1),
+        transparent 60%
+      ),
+      radial-gradient(
+        90% 45% at 70% 18%,
+        color(from var(--gmt-cyan) srgb r g b / 0.12),
+        transparent 65%
+      ),
+      radial-gradient(
+        110% 40% at 40% 40%,
+        color(from var(--gmt-spring) srgb r g b / 0.06),
+        transparent 70%
+      ),
+      var(--gmt-void);
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 1.6s var(--gmt-easing);
+  }
+  canvas.on {
+    opacity: 1;
+  }
+  canvas.quick {
+    transition-duration: 0.4s;
+  }
+
+  /* Barely there until hovered, focused or open. */
+  .sky-info-button {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 5;
+    font-size: 0.8rem;
+    opacity: 0.35;
+    transition: opacity var(--gmt-duration-fast) var(--gmt-easing);
+  }
+  .sky-info-button[hidden] {
+    display: none;
+  }
+  .sky-info-button:hover,
+  .sky-info-button:focus-visible,
+  .sky-info-button:has(+ .sky-info:popover-open) {
+    opacity: 1;
+  }
+
+  .sky-info {
+    position: fixed;
+    inset: auto 12px 52px auto;
+    margin: 0;
+    width: min(22rem, calc(100vw - 24px));
+    color: var(--gmt-ice-dim);
+    font-size: var(--gmt-text-xs);
+    line-height: 1.5;
+  }
+  .sky-info p {
+    margin: 0 0 0.5rem;
+  }
+  /* Location switcher: a row of chips, the current one lit. */
+  .sky-sites {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gmt-space-2);
+    margin: 0 0 var(--gmt-space-3);
+  }
+  .sky-sites button {
+    padding: 0.2rem 0.6rem;
+    font-size: var(--gmt-text-xs);
+  }
+  .sky-sites button[aria-pressed="true"] {
+    color: var(--gmt-cyan);
+    border-color: var(--gmt-border-strong);
+    background: var(--gmt-fill-strong);
+  }
+  .sky-info .place {
+    color: var(--gmt-ice);
+    font-size: var(--gmt-text-sm);
+  }
+  .sky-info dl {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 0.25rem 0.75rem;
+    margin: 0 0 0.5rem;
+  }
+  .sky-info dl:last-child {
+    margin-bottom: 0;
+  }
+  .sky-info dt {
+    color: var(--gmt-ice);
+  }
+  .sky-info dd {
+    margin: 0;
+  }
+</style>

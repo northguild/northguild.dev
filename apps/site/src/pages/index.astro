@@ -1,5 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
+import Aurora from "../components/Aurora.astro";
 import RepoCard from "../components/RepoCard.astro";
 
 // Descriptions are each package's own `package.json` `description`, verbatim.
@@ -22,6 +23,7 @@ const repos = [
 ---
 
 <Base title="NorthGuild">
+  <Aurora />
   <h1>NorthGuild</h1>
   <p class="intro">Open-source tools for developers, built in the frigid north.</p>
   <div class="grid">
