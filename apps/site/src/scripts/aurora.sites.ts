@@ -124,6 +124,7 @@ export const SKY_CREDITS: [string, string][] = [
     "Planets",
     "JPL Keplerian elements for approximate positions (E. M. Standish).",
   ],
+  ["Star names", "IAU Catalog of Star Names (IAU WGSN)."],
 ];
 
 const POINTS = [
