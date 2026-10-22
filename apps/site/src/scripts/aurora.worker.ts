@@ -3,8 +3,10 @@
 // Passes per frame:
 // 1. Footprint: each curtain's ground track and brightness into a small
 //    texture (see aurora.shaders.ts).
-// 2. Sky: a fullscreen march through the aurora in perspective, plus the moon.
-// 3. Stars from the Bright Star Catalogue, then the sparks, added on top.
+// 2. Sky: a fullscreen march through the aurora in perspective, plus the moon
+//    and, when it is up, the sun and its ice halos.
+// 3. Stars from the Bright Star Catalogue and the planets, then the sparks,
+//    added on top.
 // 4. The mountain skyline, drawn last so it hides everything behind it.
 // The page sends the theme token values, sizes and visibility; we answer "on"
 // once a frame is up and "off" if we give up.
@@ -24,7 +26,14 @@ import {
 import { getSystemTimeZone, getUnixNow } from "@northguild/gmt";
 import { MOON } from "./aurora.moon";
 import { SITES } from "./aurora.sites";
-import { columns, sky, type Sky } from "./aurora.sky";
+import {
+  PLANETS,
+  apply,
+  columns,
+  sky,
+  type Sky,
+  type Vec3,
+} from "./aurora.sky";
 import { SKYLINE as HELSINKI } from "./skylines/helsinki";
 import { SKYLINE as ISAFJORDUR } from "./skylines/isafjordur";
 
@@ -34,8 +43,9 @@ const MAX_EDGE = 1280;
 const SPARKS = 4000;
 const RAD = Math.PI / 180;
 
-// Wall-clock epoch milliseconds from Temporal (via gmt): the stars and moon
-// need the real time. Frame timing uses rAF stamps, not the wall clock.
+// Wall-clock epoch milliseconds from Temporal (via gmt): the stars, planets,
+// moon and sun need the real time. Frame timing uses rAF stamps, not the wall
+// clock.
 let wallMs = 0;
 const wall = () => (wallMs = getUnixNow() ?? wallMs);
 
@@ -63,10 +73,21 @@ export type AuroraMessage =
   | { type: "site"; site: number }
   | { type: "size"; width: number; height: number }
   | { type: "still"; still: boolean }
-  | { type: "hidden"; hidden: boolean };
+  | { type: "hidden"; hidden: boolean }
+  /** What is drawn near this point (CSS pixels), within reach pixels. */
+  | { type: "pick"; x: number; y: number; reach: number };
 
-/** To the page: the frame is up ("on"), we gave up ("off"), or the site drawn. */
-export type WorkerMessage = "on" | "off" | { site: number };
+/** The sun, moon, a planet or a named star as drawn, in CSS pixels from the
+ * canvas's corner; note is "Planet" or a star's constellation. */
+export type SkyLabel = { name: string; note: string; x: number; y: number };
+
+/** To the page: the frame is up ("on"), we gave up ("off"), the site drawn,
+ * or the answer to a pick (for the tooltips). */
+export type WorkerMessage =
+  | "on"
+  | "off"
+  | { site: number }
+  | { pick: SkyLabel | null };
 
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<AuroraMessage>) => void) | null;
@@ -272,6 +293,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   const seeds = buffer(Float32Array.from({ length: SPARKS * 4 }, Math.random));
   const ridgeBuf = gl.createBuffer();
   let ridgeCount = 0;
+  const planetBuf = gl.createBuffer();
   let starBuf: WebGLBuffer | null = null;
   let starCount = 0;
   let starsAt = 0;
@@ -308,6 +330,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   // Everything that depends on where the viewer stands.
   let site = SITES[0]!;
   let tilt = [0, 0];
+  // Ridge elevation by azimuth (degrees), radians; what is below it is hidden.
+  let ridgeAt = (_az: number) => -Math.PI / 2;
   let cam = new Float32Array(9);
   let tanY = 1;
   // Camera basis as columns (right, up, forward), heading from north. On a
@@ -347,6 +371,13 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     aim();
     const skyline = SKYLINES[site.id];
     const mesh = skyline ? ridgeMesh(skyline) : new Float32Array(0);
+    if (skyline) {
+      const elev = new Int16Array(bytes(skyline.elev).buffer);
+      ridgeAt = (az) =>
+        ((elev[Math.round((az - skyline.from) / skyline.step)] ?? -9000) /
+          100) *
+        RAD;
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, ridgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
     ridgeCount = mesh.length / 4;
@@ -370,6 +401,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let tuning = true;
   let skyAt = wall();
   let now: Sky = sky(site, skyAt);
+  let planetsAt = 0;
 
   const resize = () => {
     const w = width || 1;
@@ -379,6 +411,55 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     canvas.width = Math.round(w * scale);
     canvas.height = Math.round(h * scale);
     aim();
+  };
+
+  // What the page's pointer is over: the nearest sun, moon, planet or named
+  // star within reach that is up, clear of the skyline, bright enough to be
+  // drawn and in frame.
+  let starDirs: Float32Array | null = null;
+  let named: [number, string, string][] = [];
+  const pick = (px: number, py: number, reach: number): SkyLabel | null => {
+    const w = width || 1;
+    const h = height || 1;
+    const limit = site.limit - 2 * now.moonlight;
+    let best: SkyLabel | null = null;
+    let nearest = reach * reach;
+    const consider = (name: string, note: string, d: Vec3, above: number) => {
+      const alt = Math.asin(d[1]);
+      if (alt < above || alt < ridgeAt(Math.atan2(d[0], d[2]) / RAD)) return;
+      const z = d[0] * cam[6]! + d[1] * cam[7]! + d[2] * cam[8]!;
+      if (z <= 0) return;
+      const nx =
+        (d[0] * cam[0]! + d[1] * cam[1]! + d[2] * cam[2]!) /
+        (z * tanY * (w / h));
+      const ny =
+        (d[0] * cam[3]! + d[1] * cam[4]! + d[2] * cam[5]!) / (z * tanY);
+      if (Math.abs(nx) > 1 || Math.abs(ny) > 1) return;
+      const x = ((nx + 1) / 2) * w;
+      const y = ((1 - ny) / 2) * h;
+      const dist = (x - px) ** 2 + (y - py) ** 2;
+      if (dist >= nearest) return;
+      nearest = dist;
+      best = { name, note, x: Math.round(x), y: Math.round(y) };
+    };
+    // Fainter near the horizon, as the star shader draws it.
+    const seen = (mag: number, d: Vec3) =>
+      mag + 0.12 * (1 / (Math.max(d[1], 0) + 0.04) - 1) < limit;
+    consider("Sun", "", now.sun, -0.83 * RAD);
+    consider("Moon", "", now.moon, 0);
+    const p = now.planets;
+    PLANETS.forEach((name, k) => {
+      const d = apply(now.stars, [p[k * 5]!, p[k * 5 + 1]!, p[k * 5 + 2]!]);
+      if (seen(p[k * 5 + 3]!, d)) consider(name, "Planet", d, 0);
+    });
+    const s = starDirs;
+    if (s) {
+      for (const [i, name, constellation] of named) {
+        const d = apply(now.stars, [s[i * 5]!, s[i * 5 + 1]!, s[i * 5 + 2]!]);
+        if (seen(s[i * 5 + 3]!, d)) consider(name, constellation, d, 0);
+      }
+    }
+    return best;
   };
 
   const quad = (program: WebGLProgram) => {
@@ -392,6 +473,12 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (wall() - skyAt > 1000) {
       skyAt = wallMs;
       now = sky(site, skyAt);
+      planetsAt = 0;
+    }
+    if (!planetsAt) {
+      planetsAt = skyAt;
+      gl.bindBuffer(gl.ARRAY_BUFFER, planetBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, now.planets, gl.DYNAMIC_DRAW);
     }
     const tan = [tanY * (canvas.width / canvas.height), tanY];
     const px = Math.max(1, canvas.height / 540);
@@ -430,25 +517,40 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.uniform4f(at(sp, "uMoon"), ...now.moon, now.moonRadius);
     gl.uniform3fv(at(sp, "uMoonN"), now.moonNorth);
     gl.uniform3fv(at(sp, "uSun"), now.sun);
+    gl.uniform2f(at(sp, "uSunDisc"), now.sunRadius, now.sunVisible);
+    gl.uniform3fv(at(sp, "uShadow"), now.shadow);
+    gl.uniform2f(at(sp, "uShadowR"), now.umbra, now.penumbra);
     quad(sp);
 
     // 3. Stars and sparks, added on top.
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    if (starBuf && starCount) {
-      view(stars);
-      gl.uniformMatrix3fv(at(stars, "uStars"), false, columns(now.stars));
-      gl.uniform1f(at(stars, "uLimit"), site.limit - 2 * now.moonlight);
-      gl.uniform1f(
-        at(stars, "uFade"),
-        Math.min(1, (performance.now() - starsAt) / 1500),
-      );
-      const a = attrib(stars, "aDir", starBuf, 3, 20, 0);
-      const b = attrib(stars, "aMag", starBuf, 2, 20, 12);
-      gl.drawArrays(gl.POINTS, 0, starCount);
+    view(stars);
+    gl.uniformMatrix3fv(at(stars, "uStars"), false, columns(now.stars));
+    gl.uniform1f(at(stars, "uLimit"), site.limit - 2 * now.moonlight);
+    const points = (
+      buf: WebGLBuffer | null,
+      count: number,
+      fade: number,
+      steady: number,
+    ) => {
+      gl.uniform1f(at(stars, "uFade"), fade);
+      gl.uniform1f(at(stars, "uSteady"), steady);
+      const a = attrib(stars, "aDir", buf, 3, 20, 0);
+      const b = attrib(stars, "aMag", buf, 2, 20, 12);
+      gl.drawArrays(gl.POINTS, 0, count);
       gl.disableVertexAttribArray(a);
       gl.disableVertexAttribArray(b);
+    };
+    if (starBuf && starCount) {
+      points(
+        starBuf,
+        starCount,
+        Math.min(1, (performance.now() - starsAt) / 1500),
+        0,
+      );
     }
+    points(planetBuf, now.planets.length / 5, 1, 1);
     view(sparks);
     const s = attrib(sparks, "aSeed", seeds, 4);
     gl.drawArrays(gl.POINTS, 0, sparkCount);
@@ -522,18 +624,22 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   scope.postMessage("on");
   run();
 
-  // Stars arrive after the first frame so they never delay it. Without them
-  // the aurora still runs.
+  // Stars arrive after the first frame so they never delay it, then the star
+  // names for the tooltips. Without them the aurora still runs.
   fetch(new URL("/stars.bin", self.location.origin))
     .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(res.status)))
     .then((buf) => {
       if (level > 2) return;
       const data = starData(buf);
+      starDirs = data;
       starBuf = buffer(data);
       starCount = data.length / 5;
       starsAt = still ? -Infinity : performance.now();
       if (!raf) draw();
+      return fetch(new URL("/star-names.json", self.location.origin));
     })
+    .then((res) => (res?.ok ? res.json() : []))
+    .then((list: [number, string, string][]) => (named = list))
     .catch(() => {});
 
   scope.onmessage = ({ data }) => {
@@ -542,6 +648,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       place(data.site);
       skyAt = wall();
       now = sky(site, skyAt);
+      planetsAt = 0;
       draw();
       scope.postMessage("on");
     } else if (data.type === "size") {
@@ -558,6 +665,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       hidden = data.hidden;
       if (hidden) stop();
       else run();
+    } else if (data.type === "pick") {
+      scope.postMessage({ pick: pick(data.x, data.y, data.reach) });
     }
   };
 }

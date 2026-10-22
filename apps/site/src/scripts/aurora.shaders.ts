@@ -117,6 +117,9 @@ uniform vec2 uTan;
 uniform float uPxAng;
 uniform vec4 uMoon;       // direction, angular radius
 uniform vec3 uMoonN, uSun;
+uniform vec2 uSunDisc;    // angular radius, fraction not behind the moon
+uniform vec3 uShadow;     // earth's shadow axis from the moon's centre, moon radii
+uniform vec2 uShadowR;    // umbra and penumbra radii, moon radii
 uniform float uMoonlight;
 uniform float uGlow;      // city light near the horizon, 0..1
 uniform float uLights;    // lit windows and streets, 0..1
@@ -150,9 +153,28 @@ float fetchCoarse(float x, float k) {
 float profile(float h, float g) {
   return smoothstep(94.0, 106.0, h) * exp(-max(h - 106.0, 0.0) / (25.0 + 45.0 * g));
 }
+// Earth's shadow on the moon: how far the surface point n (moon radii from
+// its centre) is from the shadow's axis, and the sunlight left there
+// (0 in the umbra, 1 outside the penumbra).
+float shadowDist(vec3 n) {
+  vec3 q = n - uShadow;
+  return length(q - uSun * dot(q, uSun));
+}
+float sunlit(vec3 n) {
+  return smoothstep(uShadowR.x, uShadowR.y, shadowDist(n));
+}
 vec3 moon(vec3 rd) {
+  if (uMoon.y < -0.02) return vec3(0.0);
   float cm = dot(rd, uMoon.xyz);
-  if (cm < cos(uMoon.w * 3.0) || uMoon.y < -0.02) return vec3(0.0);
+  // Daylight washes the moon out: half as bright while the sun is up, so the
+  // sun always outshines it.
+  float washed = 1.0 - 0.5 * smoothstep(-0.0145, 0.03, uSun.y);
+  // The same soft glow as the sun's, as strong as the moon is full and lit.
+  float full = (0.5 - 0.5 * dot(uSun, uMoon.xyz)) * sunlit(-uMoon.xyz);
+  float a = acos(clamp(cm, -1.0, 1.0));
+  vec3 glow = full * (mix(uIce, uCyan, 0.3) * 0.3 * exp(-a / 0.012)
+    + mix(uIce, uCyan, 0.6) * 0.035 * exp(-a / 0.08));
+  if (cm < cos(uMoon.w * 3.0)) return glow * washed;
   vec3 o = (rd - uMoon.xyz * cm) / sin(uMoon.w);
   float r = length(o);
   float px = uPxAng / uMoon.w;
@@ -164,12 +186,76 @@ vec3 moon(vec3 rd) {
   float lon = atan(dot(n, west), dot(n, -uMoon.xyz));
   float alb = texture2D(uMoonTex, vec2(0.5 + lon / (2.0 * PI), 0.5 - lat / PI)).r;
   float day = max(dot(n, uSun), 0.0);
-  float halo = exp(-(1.0 - cm) / (uMoon.w * uMoon.w * 6.0)) * 0.06;
-  float full = 0.5 - 0.5 * dot(uSun, uMoon.xyz);
-  return uIce * (cover * alb * (2.2 * day + 0.03) + halo * full);
+  // Lunar eclipse: the penumbra dims softly; in the umbra only sunlight bent
+  // through the earth's air reaches the moon, a dim glow brightening toward
+  // the edge (copper in life, the theme's purple here) with a turquoise
+  // fringe at the edge, from ozone.
+  float lit = sunlit(n);
+  float d = shadowDist(n);
+  float edge = (d - uShadowR.x) / 0.12;
+  vec3 bent = uPurple * (0.07 + 0.2 * smoothstep(0.0, uShadowR.x, d))
+    + uCyan * 0.1 * exp(-edge * edge);
+  vec3 surface = alb * (uIce * (2.2 * day * lit + 0.03) + 2.2 * day * (1.0 - lit) * bent);
+  // Less glow over the disc itself, so the maria still show.
+  return (surface * cover + glow * (1.0 - 0.8 * cover)) * washed;
+}
+// The sun, only while it is really up: an ice-blue disc at true size, a faint
+// 22° ice halo and, when low, a sun pillar. The moon can eclipse it. The sky stays dark (always night here).
+// Halo colours run in the theme's order where real ones run red to blue.
+const float HALO = 0.3840;  // 22° halo radius
+vec3 sun(vec3 rd) {
+  float up = smoothstep(-0.0145, 0.03, uSun.y);
+  if (up <= 0.0) return vec3(0.0);
+  float cs = dot(rd, uSun);
+  float a = acos(clamp(cs, -1.0, 1.0));
+  float px = uPxAng / uSunDisc.x;
+  float r = a / uSunDisc.x;
+  // Solar eclipse: the moon's dark disc in front. What is left of the sun
+  // still glows (the last sliver flares: the diamond ring).
+  float mr = acos(clamp(dot(rd, uMoon.xyz), -1.0, 1.0)) / uMoon.w;
+  float mpx = uPxAng / uMoon.w;
+  float behind = 1.0 - smoothstep(1.0 - mpx, 1.0 + mpx, mr);
+  float shine = sqrt(uSunDisc.y);
+  // Limb-darkened disc and a tight aureole of forward scattering.
+  float disc = (1.0 - smoothstep(1.0 - px, 1.0 + px, r))
+    * (0.55 + 0.45 * sqrt(max(0.0, 1.0 - r * r))) * (1.0 - behind);
+  vec3 ice = mix(uIce, uCyan, 0.3);
+  vec3 col = ice * (2.4 * disc + 0.35 * shine * exp(-a / 0.012))
+    + mix(uIce, uCyan, 0.6) * 0.04 * shine * exp(-a / 0.08);
+  // Totality: the corona, pearly and streaked, two or three solar radii out.
+  float total = 1.0 - smoothstep(0.0, 0.004, uSunDisc.y);
+  if (total > 0.0) {
+    vec3 side = normalize(cross(uSun, vec3(0.0, 1.0, 0.0)));
+    vec3 lift = cross(side, uSun);
+    vec2 pa = normalize(vec2(dot(rd, side), dot(rd, lift)) + 1e-6);
+    float streak = noise(pa * 3.0 + 5.0) * noise(pa * 9.0 + 11.0);
+    float h = max(r - 1.0, 0.0);
+    float corona = 0.6 * exp(-h / 0.3) + 0.5 * streak * exp(-h / 1.5);
+    col += mix(uIce, uCyan, 0.2) * corona * total * (1.0 - behind) * step(1.0, r);
+  }
+  // Thin cirrus or diamond dust: the crystals come and go across the sky,
+  // so the halos are patchy and drift slowly.
+  vec2 q = vec2(atan(rd.x, rd.z) * 5.0, rd.y * 9.0) + uT * vec2(0.004, 0.002);
+  float veil = smoothstep(0.15, 0.8, 0.65 * noise(q) + 0.35 * noise(q * 2.7 + 9.0));
+  // 22° halo: a faint ring, coloured on its inner side and broken where the
+  // crystals thin out. Soft on both sides: a sharp inner edge with a long
+  // outer fade makes the sky inside look darker (the Cornsweet effect).
+  float dh = a - HALO;
+  float ring = exp(-dh * dh / (dh < 0.0 ? 0.00008 : 0.00018));
+  vec3 tint = mix(uPurple, mix(uCyan, uIce, smoothstep(0.004, 0.03, dh)),
+    smoothstep(-0.004, 0.012, dh));
+  col += tint * ring * 0.035 * veil * veil * uSunDisc.y;
+  // A sun pillar over a low sun, from plate crystals.
+  float se = uSun.y, ce = sqrt(1.0 - se * se);
+  float dAz = atan(rd.x * uSun.z - rd.z * uSun.x, rd.x * uSun.x + rd.z * uSun.z);
+  float dAlt = asin(clamp(rd.y, -1.0, 1.0)) - asin(se);
+  float low = 1.0 - smoothstep(0.03, 0.11, se);
+  col += ice * 0.25 * low * uSunDisc.y * exp(-dAz * dAz * ce * ce / 0.000016)
+    * exp(-abs(dAlt) / 0.05);
+  return col * up;
 }
 // Sky seen along rd (above the horizon): background, city glow, moonlight,
-// the aurora and the moon. Before tone mapping. j is the step jitter.
+// the aurora, the moon and the sun. Before tone mapping. j is the step jitter.
 vec3 skyColour(vec3 rd, float j) {
   float c2 = dot(rd.xz, rd.xz);
   vec3 acc = vec3(0.0);
@@ -205,7 +291,7 @@ vec3 skyColour(vec3 rd, float j) {
   vec3 col = uVoid + uTeal * 0.05 * exp(-e * 8.0)
     + uGlow * (uTeal * 0.09 * exp(-e * 9.0) + uIce * 0.035 * exp(-e * 22.0))
     + uMoonlight * (uIce * 0.02 + uTeal * 0.05) * (0.5 + 0.5 * exp(-e * 3.0));
-  return col + (acc * 0.035 + moon(rd)) * air;
+  return col + (acc * 0.035 + moon(rd) + sun(rd)) * air;
 }
 // City lights along the shore, by azimuth bin: on or off, and how bright.
 float shoreLight(float az) {
@@ -287,7 +373,8 @@ void main() {
 
 // Catalogue stars: J2000 directions turned into the sky of date. Fainter
 // near the horizon (extinction) and when the moon brightens the sky. They
-// twinkle; they never move except with the sky itself.
+// twinkle; they never move except with the sky itself. The planets use the
+// same program, barely twinkling.
 export const STAR_VS = `
 precision highp float;
 ${PROJECT}
@@ -296,6 +383,8 @@ attribute vec2 aMag;
 uniform mat3 uStars;
 uniform vec3 uIce, uCyan;
 uniform float uPx, uT, uLimit, uFade;
+// 1 for planets, which hardly twinkle.
+uniform float uSteady;
 varying vec3 vCol;
 void main() {
   vec3 w = uStars * aDir;
@@ -304,7 +393,7 @@ void main() {
   float b = pow(2.512, -m);
   float a = min(2.6 * sqrt(b), 1.6) * smoothstep(uLimit + 0.3, uLimit - 0.6, m) * uFade;
   float seed = fract(sin(dot(aDir.xy, vec2(91.7, 37.3)) + aDir.z * 11.1) * 4375.85);
-  float amp = 0.1 + 0.3 * (1.0 - smoothstep(0.05, 0.5, alt));
+  float amp = (0.1 + 0.3 * (1.0 - smoothstep(0.05, 0.5, alt))) * (1.0 - 0.8 * uSteady);
   float tw = 1.0 + amp * sin(uT * (1.1 + 2.0 * seed) + seed * 60.0)
     * sin(uT * 0.37 + seed * 17.0);
   vCol = mix(uIce, uCyan, 0.35 * smoothstep(0.4, -0.1, aMag.y)) * a * tw;

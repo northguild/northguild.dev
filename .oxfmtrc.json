@@ -9,6 +9,7 @@
     "**/*.css",
     "**/*.md",
     "**/*.yaml",
-    "pnpm-lock.yaml"
+    "pnpm-lock.yaml",
+    "apps/site/public/star-names.json"
   ]
 }
