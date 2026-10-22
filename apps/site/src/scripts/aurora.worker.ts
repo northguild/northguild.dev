@@ -3,8 +3,10 @@
 // Passes per frame:
 // 1. Footprint: each curtain's ground track and brightness into a small
 //    texture (see aurora.shaders.ts).
-// 2. Sky: a fullscreen march through the aurora in perspective, plus the moon.
-// 3. Stars from the Bright Star Catalogue, then the sparks, added on top.
+// 2. Sky: a fullscreen march through the aurora in perspective, plus the moon
+//    and, when it is up, the sun and its ice halos.
+// 3. Stars from the Bright Star Catalogue and the planets, then the sparks,
+//    added on top.
 // 4. The mountain skyline, drawn last so it hides everything behind it.
 // The page sends the theme token values, sizes and visibility; we answer "on"
 // once a frame is up and "off" if we give up.
@@ -34,8 +36,9 @@ const MAX_EDGE = 1280;
 const SPARKS = 4000;
 const RAD = Math.PI / 180;
 
-// Wall-clock epoch milliseconds from Temporal (via gmt): the stars and moon
-// need the real time. Frame timing uses rAF stamps, not the wall clock.
+// Wall-clock epoch milliseconds from Temporal (via gmt): the stars, planets,
+// moon and sun need the real time. Frame timing uses rAF stamps, not the wall
+// clock.
 let wallMs = 0;
 const wall = () => (wallMs = getUnixNow() ?? wallMs);
 
@@ -272,6 +275,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   const seeds = buffer(Float32Array.from({ length: SPARKS * 4 }, Math.random));
   const ridgeBuf = gl.createBuffer();
   let ridgeCount = 0;
+  const planetBuf = gl.createBuffer();
   let starBuf: WebGLBuffer | null = null;
   let starCount = 0;
   let starsAt = 0;
@@ -370,6 +374,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let tuning = true;
   let skyAt = wall();
   let now: Sky = sky(site, skyAt);
+  let planetsAt = 0;
 
   const resize = () => {
     const w = width || 1;
@@ -392,6 +397,12 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (wall() - skyAt > 1000) {
       skyAt = wallMs;
       now = sky(site, skyAt);
+      planetsAt = 0;
+    }
+    if (!planetsAt) {
+      planetsAt = skyAt;
+      gl.bindBuffer(gl.ARRAY_BUFFER, planetBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, now.planets, gl.DYNAMIC_DRAW);
     }
     const tan = [tanY * (canvas.width / canvas.height), tanY];
     const px = Math.max(1, canvas.height / 540);
@@ -430,25 +441,40 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.uniform4f(at(sp, "uMoon"), ...now.moon, now.moonRadius);
     gl.uniform3fv(at(sp, "uMoonN"), now.moonNorth);
     gl.uniform3fv(at(sp, "uSun"), now.sun);
+    gl.uniform2f(at(sp, "uSunDisc"), now.sunRadius, now.sunVisible);
+    gl.uniform3fv(at(sp, "uShadow"), now.shadow);
+    gl.uniform2f(at(sp, "uShadowR"), now.umbra, now.penumbra);
     quad(sp);
 
     // 3. Stars and sparks, added on top.
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    if (starBuf && starCount) {
-      view(stars);
-      gl.uniformMatrix3fv(at(stars, "uStars"), false, columns(now.stars));
-      gl.uniform1f(at(stars, "uLimit"), site.limit - 2 * now.moonlight);
-      gl.uniform1f(
-        at(stars, "uFade"),
-        Math.min(1, (performance.now() - starsAt) / 1500),
-      );
-      const a = attrib(stars, "aDir", starBuf, 3, 20, 0);
-      const b = attrib(stars, "aMag", starBuf, 2, 20, 12);
-      gl.drawArrays(gl.POINTS, 0, starCount);
+    view(stars);
+    gl.uniformMatrix3fv(at(stars, "uStars"), false, columns(now.stars));
+    gl.uniform1f(at(stars, "uLimit"), site.limit - 2 * now.moonlight);
+    const points = (
+      buf: WebGLBuffer | null,
+      count: number,
+      fade: number,
+      steady: number,
+    ) => {
+      gl.uniform1f(at(stars, "uFade"), fade);
+      gl.uniform1f(at(stars, "uSteady"), steady);
+      const a = attrib(stars, "aDir", buf, 3, 20, 0);
+      const b = attrib(stars, "aMag", buf, 2, 20, 12);
+      gl.drawArrays(gl.POINTS, 0, count);
       gl.disableVertexAttribArray(a);
       gl.disableVertexAttribArray(b);
+    };
+    if (starBuf && starCount) {
+      points(
+        starBuf,
+        starCount,
+        Math.min(1, (performance.now() - starsAt) / 1500),
+        0,
+      );
     }
+    points(planetBuf, now.planets.length / 5, 1, 1);
     view(sparks);
     const s = attrib(sparks, "aSeed", seeds, 4);
     gl.drawArrays(gl.POINTS, 0, sparkCount);
@@ -542,6 +568,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       place(data.site);
       skyAt = wall();
       now = sky(site, skyAt);
+      planetsAt = 0;
       draw();
       scope.postMessage("on");
     } else if (data.type === "size") {

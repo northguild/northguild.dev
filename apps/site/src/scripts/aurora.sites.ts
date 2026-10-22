@@ -120,6 +120,10 @@ export const SITES: Site[] = [
 export const SKY_CREDITS: [string, string][] = [
   ["Stars", "Yale Bright Star Catalogue, 5th revised edition (CDS V/50)."],
   ["Moon", "NASA's Scientific Visualization Studio."],
+  [
+    "Planets",
+    "JPL Keplerian elements for approximate positions (E. M. Standish).",
+  ],
 ];
 
 const POINTS = [
