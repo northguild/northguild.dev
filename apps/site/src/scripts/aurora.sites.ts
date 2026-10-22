@@ -102,8 +102,8 @@ export const SITES: Site[] = [
     dip: 74,
     decl: 11,
     curtains: [
-      { base: 550, centre: -250, half: 1000 },
-      { base: 900, centre: -400, half: 1600 },
+      { base: 750, centre: -350, half: 1300 },
+      { base: 1000, centre: -470, half: 1800 },
     ],
     glow: 1,
     limit: 4.2,
