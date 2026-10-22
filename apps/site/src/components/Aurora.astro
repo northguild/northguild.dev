@@ -211,7 +211,10 @@ import {
     const note = document.createElement("span");
     note.textContent = found.note;
     tip.replaceChildren(found.name, ...(found.note ? [note] : []));
-    tip.style.left = `${found.x}px`;
+    // Centred on the object, but kept inside the window at the sides.
+    const half = tip.offsetWidth / 2 + 4;
+    const width = document.documentElement.clientWidth;
+    tip.style.left = `${Math.min(Math.max(found.x, half), width - half)}px`;
     tip.style.top = `${found.y}px`;
     tip.classList.toggle("below", found.y < 48);
   };
@@ -238,7 +241,10 @@ import {
     { passive: true },
   );
   document.addEventListener("pointerdown", point, { passive: true });
-  document.documentElement.addEventListener("pointerleave", () => {
+  // A touch pointer "leaves" as the finger lifts, right after the tap that
+  // asked; its label stays until the next tap instead.
+  document.documentElement.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "touch") return;
     over = false;
     label(null);
   });
