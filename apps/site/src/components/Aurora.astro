@@ -270,18 +270,38 @@ import {
 
   // Constellation lines: each run draws itself out from the hovered star, a
   // step at a time, and the whole figure fades away a moment after the
-  // pointer leaves. Moving to another star of the same constellation keeps it.
+  // pointer leaves. Moving to another star of the same constellation keeps it,
+  // and as the worker follows the star (resize, the sky turning) the lines
+  // move with it without drawing again.
   const sketch = document.querySelector<SVGSVGElement>(".sky-lines");
   let figure = "";
   let wipe = 0;
+  const polyline = ({ step, points }: SkyLine, drawn: boolean) => {
+    const line = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "polyline",
+    );
+    line.setAttribute("points", points.join(" "));
+    line.setAttribute("pathLength", "1");
+    line.style.setProperty("--step", String(step));
+    line.classList.toggle("drawn", drawn);
+    return line;
+  };
   const trace = (found: SkyLabel | null) => {
     if (!sketch) return;
     const next = (found?.lines && found.figure) || "";
     if (next === figure) {
-      if (next) {
-        clearTimeout(wipe);
-        sketch.classList.remove("out");
-      }
+      if (!next) return;
+      clearTimeout(wipe);
+      sketch.classList.remove("out");
+      const lines = found?.lines ?? [];
+      const old = [...sketch.children];
+      lines.forEach((line, k) => {
+        const el = old[k];
+        if (el) el.setAttribute("points", line.points.join(" "));
+        else sketch.append(polyline(line, true));
+      });
+      old.slice(lines.length).forEach((el) => el.remove());
       return;
     }
     if (!next) {
@@ -297,22 +317,17 @@ import {
     figure = next;
     sketch.classList.remove("out");
     sketch.replaceChildren(
-      ...(found?.lines ?? []).map(({ step, points }: SkyLine) => {
-        const line = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "polyline",
-        );
-        line.setAttribute("points", points.join(" "));
-        line.setAttribute("pathLength", "1");
-        line.style.setProperty("--step", String(step));
-        return line;
-      }),
+      ...(found?.lines ?? []).map((line) => polyline(line, false)),
     );
   };
 
+  // Once nothing is shown, the worker can stop following the last pick.
+  let holding = false;
   const label = (found: SkyLabel | null) => {
     const shown =
       found && over && canvas?.classList.contains("on") ? found : null;
+    if (holding && !shown) post?.({ type: "drop" });
+    holding = !!shown;
     name(shown);
     trace(shown);
   };
@@ -471,6 +486,11 @@ import {
     stroke-dashoffset: 1;
     animation: sky-trace 0.6s var(--gmt-enter-easing) forwards;
     animation-delay: calc(var(--step) * 0.16s);
+  }
+  /* Lines added while the figure is up, as a cut closes: already drawn. */
+  .sky-lines :global(polyline.drawn) {
+    animation: none;
+    stroke-dashoffset: 0;
   }
   @keyframes sky-trace {
     from {

@@ -75,7 +75,9 @@ export type AuroraMessage =
   | { type: "still"; still: boolean }
   | { type: "hidden"; hidden: boolean }
   /** What is drawn near this point (CSS pixels), within reach pixels. */
-  | { type: "pick"; x: number; y: number; reach: number };
+  | { type: "pick"; x: number; y: number; reach: number }
+  /** The page no longer shows the last pick; stop following it. */
+  | { type: "drop" };
 
 /** One unbroken run of a constellation line in CSS pixels, [x, y, x, y, …],
  * drawn from the end nearer the hovered star; step counts lines out from it. */
@@ -100,7 +102,9 @@ export type SkyLabel = {
 type StarName = [number, string, string?, 0?];
 
 /** To the page: the frame is up ("on"), we gave up ("off"), the site drawn,
- * or the answer to a pick (for the tooltips). */
+ * or the answer to a pick (for the tooltips). The picked object is then
+ * followed: after a resize and as the sky turns, it comes again where the
+ * object is now, or null once it is no longer drawn. */
 export type WorkerMessage =
   | "on"
   | "off"
@@ -436,8 +440,10 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   // drawn and in frame.
   let starDirs: Float32Array | null = null;
   let named: StarName[] = [];
-  // Constellation stick figures by name, as star index pairs.
+  // Constellation stick figures by name, as star index pairs, and the
+  // figure of each star in one (for stars whose label names none).
   let figures: Record<string, number[]> = {};
+  const figureOf = new Map<number, string>();
   // A direction to CSS pixels, or null behind the camera.
   const screen = (d: Vec3): [number, number] | null => {
     const w = width || 1;
@@ -530,12 +536,21 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     }
     return out;
   };
+  // What was last picked, to follow: a star's index, or SUN, LUNA or
+  // PLANET - k for planet k (LUNA: MOON is the texture). NOTHING when
+  // nothing is.
+  const [NOTHING, SUN, LUNA, PLANET] = [-1, -2, -3, -4];
+  let held = NOTHING;
+  const planetAt = (k: number): Vec3 => {
+    const p = now.planets;
+    return apply(now.stars, [p[k * 5]!, p[k * 5 + 1]!, p[k * 5 + 2]!]);
+  };
   const pick = (px: number, py: number, reach: number): SkyLabel | null => {
     const w = width || 1;
     const h = height || 1;
     const limit = site.limit - 2 * now.moonlight;
     let best: SkyLabel | null = null;
-    let bestStar = -1;
+    let bestWhat = NOTHING;
     let bestFigure = "";
     let nearest = reach * reach;
     const consider = (
@@ -543,7 +558,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       note: string,
       d: Vec3,
       above: number,
-      star = -1,
+      what: number,
       figure = "",
     ) => {
       if (!clear(d, above)) return;
@@ -554,19 +569,20 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       const dist = (x - px) ** 2 + (y - py) ** 2;
       if (dist >= nearest) return;
       nearest = dist;
-      bestStar = star;
+      bestWhat = what;
       bestFigure = figure;
       best = { name, note, x: Math.round(x), y: Math.round(y) };
     };
     // Fainter near the horizon, as the star shader draws it.
     const seen = (mag: number, d: Vec3) =>
       mag + 0.12 * (1 / (Math.max(d[1], 0) + 0.04) - 1) < limit;
-    consider("Sun", "", now.sun, -0.83 * RAD);
-    consider("Moon", "", now.moon, 0);
-    const p = now.planets;
+    consider("Sun", "", now.sun, -0.83 * RAD, SUN);
+    consider("Moon", "", now.moon, 0, LUNA);
     PLANETS.forEach((name, k) => {
-      const d = apply(now.stars, [p[k * 5]!, p[k * 5 + 1]!, p[k * 5 + 2]!]);
-      if (seen(p[k * 5 + 3]!, d)) consider(name, "Planet", d, 0);
+      const d = planetAt(k);
+      if (seen(now.planets[k * 5 + 3]!, d)) {
+        consider(name, "Planet", d, 0, PLANET - k);
+      }
     });
     const s = starDirs;
     if (s) {
@@ -574,17 +590,34 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
         const d = starAt(i);
         if (!seen(s[i * 5 + 3]!, d)) continue;
         const note = quiet === 0 ? "" : constellation;
-        consider(name, note, d, 0, i, constellation);
+        const figure = constellation || figureOf.get(i) || "";
+        consider(name, note, d, 0, i, figure);
       }
     }
+    held = bestWhat;
     const found = best as SkyLabel | null;
-    const pairs = found && bestStar >= 0 ? figures[bestFigure] : undefined;
+    const pairs = found && bestWhat >= 0 ? figures[bestFigure] : undefined;
     if (!found || !pairs) return found;
     return {
       ...found,
       figure: bestFigure,
-      lines: figureLines(pairs, bestStar),
+      lines: figureLines(pairs, bestWhat),
     };
+  };
+  // Pick the held object again where it is drawn now.
+  const follow = () => {
+    if (held === NOTHING) return;
+    const d =
+      held >= 0
+        ? starAt(held)
+        : held === SUN
+          ? now.sun
+          : held === LUNA
+            ? now.moon
+            : planetAt(PLANET - held);
+    const xy = screen(d);
+    scope.postMessage({ pick: xy ? pick(xy[0], xy[1], 1) : null });
+    if (!xy) held = NOTHING;
   };
 
   const quad = (program: WebGLProgram) => {
@@ -599,6 +632,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       skyAt = wallMs;
       now = sky(site, skyAt);
       planetsAt = 0;
+      follow();
     }
     if (!planetsAt) {
       planetsAt = skyAt;
@@ -769,12 +803,18 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       return fetch(new URL("/constellations.json", self.location.origin));
     })
     .then((res) => (res.ok ? res.json() : {}))
-    .then((list: Record<string, number[]>) => (figures = list))
+    .then((list: Record<string, number[]>) => {
+      figures = list;
+      for (const [name, pairs] of Object.entries(list)) {
+        for (const i of pairs) if (!figureOf.has(i)) figureOf.set(i, name);
+      }
+    })
     .catch(() => {});
 
   scope.onmessage = ({ data }) => {
     if (level > 2) return;
     if (data.type === "site") {
+      held = NOTHING;
       place(data.site);
       skyAt = wall();
       now = sky(site, skyAt);
@@ -786,6 +826,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       height = data.height;
       resize();
       draw();
+      follow();
     } else if (data.type === "still") {
       still = data.still;
       stop();
@@ -797,6 +838,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       else run();
     } else if (data.type === "pick") {
       scope.postMessage({ pick: pick(data.x, data.y, data.reach) });
+    } else if (data.type === "drop") {
+      held = NOTHING;
     }
   };
 }
