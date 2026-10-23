@@ -40,6 +40,13 @@ export type Seer = {
 };
 
 const LOCAL = { timeZone: "local" } as const;
+// The panel is English (the page is lang="en"), so its dates are too: the
+// visitor's first English locale, for their 12- or 24-hour clock, else
+// British English. Their time zone stays their own.
+const LOCALE =
+  (typeof navigator === "undefined" ? [] : navigator.languages).find((l) =>
+    l.toLowerCase().startsWith("en"),
+  ) ?? "en-GB";
 /** An ISO 8601 duration (a constant, so always valid) in milliseconds. */
 const ms = (iso: string) => totalDuration(iso, "milliseconds")!;
 const HOUR = ms("PT1H");
@@ -133,12 +140,12 @@ const capital = (text: string) =>
 
 /** "today at 21:40", "tomorrow at 02:10", "in 3 days at …", then a date. */
 const day = (ms: number, now: number) =>
-  formatCalendarUnix(ms, undefined, { ...LOCAL, reference: now });
+  formatCalendarUnix(ms, LOCALE, { ...LOCAL, reference: now });
 
 /** The time alone when it falls on the same local day as `ref`. */
 const until = (ms: number, ref: number, now: number) =>
   areUnixEqualBy(ms, ref, "day", LOCAL)
-    ? formatUnix(ms, undefined, { ...LOCAL, timeStyle: "short" })
+    ? formatUnix(ms, LOCALE, { ...LOCAL, timeStyle: "short" })
     : day(ms, now);
 
 function describe(
