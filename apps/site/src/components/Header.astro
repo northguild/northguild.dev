@@ -46,6 +46,12 @@ const links = [
     border-radius: 0;
     border-width: 0 0 1px 0;
   }
+  /* Only the bottom border: drop the glass panel's four-sided hairline and
+     its top highlight. */
+  .site-header::before,
+  .site-header::after {
+    display: none;
+  }
   .wordmark {
     font-family: var(--gmt-font-display);
     color: var(--gmt-ice);

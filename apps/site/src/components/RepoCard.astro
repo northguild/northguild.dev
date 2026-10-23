@@ -18,17 +18,25 @@ const { name, description, docsHref, githubHref } = Astro.props;
 </article>
 
 <style>
-  /* A full border on all four sides; it brightens as a whole. */
+  /* A full border on all four sides; on hover it brightens as a whole and a
+     soft glow fades in around the card, on the theme's enter timing. Going
+     back is quicker, so moving between cards never leaves a trail. */
   .repo-card {
     border: 1px solid var(--gmt-border);
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
-    transition: border-color var(--gmt-duration-fast) var(--gmt-easing);
+    box-shadow: 0 0 0 0 transparent;
+    transition:
+      border-color var(--gmt-duration-med) var(--gmt-easing),
+      box-shadow var(--gmt-duration-med) var(--gmt-easing);
   }
   .repo-card:hover,
   .repo-card:focus-within {
     border-color: var(--gmt-border-strong);
+    box-shadow: 0 0 28px -4px var(--gmt-glow);
+    transition-duration: var(--gmt-enter-duration);
+    transition-timing-function: var(--gmt-enter-easing);
   }
   h2 {
     margin: 0;
@@ -44,10 +52,42 @@ const { name, description, docsHref, githubHref } = Astro.props;
     gap: 0.75rem;
     flex-wrap: wrap;
   }
+  /* The same fade on the buttons. The glow is a layer of its own that fades
+     by opacity, so it never fights the focus ring's box-shadow. */
   .gmt-button {
+    position: relative;
     display: inline-block;
     padding: 0.4rem 1rem;
     text-decoration: none;
     color: var(--gmt-ice);
+    transition:
+      color var(--gmt-duration-med) var(--gmt-easing),
+      background var(--gmt-duration-med) var(--gmt-easing),
+      border-color var(--gmt-duration-med) var(--gmt-easing);
+  }
+  .gmt-button::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    corner-shape: inherit;
+    box-shadow:
+      0 0 14px -2px var(--gmt-glow),
+      inset 0 0 10px var(--gmt-glow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--gmt-duration-med) var(--gmt-easing);
+  }
+  .gmt-button:hover,
+  .gmt-button:focus-visible {
+    border-color: var(--gmt-border-strong);
+    transition-duration: var(--gmt-enter-duration);
+    transition-timing-function: var(--gmt-enter-easing);
+  }
+  .gmt-button:hover::after,
+  .gmt-button:focus-visible::after {
+    opacity: 1;
+    transition-duration: var(--gmt-enter-duration);
+    transition-timing-function: var(--gmt-enter-easing);
   }
 </style>
