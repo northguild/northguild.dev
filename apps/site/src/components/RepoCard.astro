@@ -22,6 +22,8 @@ const { name, description, docsHref, githubHref } = Astro.props;
      soft glow fades in around the card, on the theme's enter timing. Going
      back is quicker, so moving between cards never leaves a trail. */
   .repo-card {
+    /* A light frost, as on the header: the sky shows through softened. */
+    --gmt-blur: 4px;
     border: 1px solid var(--gmt-border);
     display: flex;
     flex-direction: column;
