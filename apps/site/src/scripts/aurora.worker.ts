@@ -24,8 +24,9 @@ import {
   skyFs,
 } from "./aurora.shaders";
 import { getSystemTimeZone, getUnixNow } from "@northguild/gmt";
+import { SUN_UP, lookAhead, type Seer, type SiteTimes } from "./aurora.ahead";
 import { MOON } from "./aurora.moon";
-import { SITES } from "./aurora.sites";
+import { SITES, type Site } from "./aurora.sites";
 import {
   PLANETS,
   apply,
@@ -78,7 +79,10 @@ export type AuroraMessage =
   /** What is drawn near this point (CSS pixels), within reach pixels. */
   | { type: "pick"; x: number; y: number; reach: number }
   /** The page no longer shows the last pick; stop following it. */
-  | { type: "drop" };
+  | { type: "drop" }
+  /** Whether the page wants the sun and moon times (the popover is open or
+   * about to be). */
+  | { type: "times"; want: boolean };
 
 /** One unbroken run of a constellation line in CSS pixels, [x, y, x, y, …],
  * drawn from the end nearer the hovered star; step counts lines out from it. */
@@ -110,7 +114,9 @@ export type WorkerMessage =
   | "on"
   | "off"
   | { site: number }
-  | { pick: SkyLabel | null };
+  | { pick: SkyLabel | null }
+  /** When the sun and moon next show in this window, per site in SITES order. */
+  | { times: SiteTimes[]; zone: string };
 
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<AuroraMessage>) => void) | null;
@@ -224,6 +230,162 @@ function starData(buf: ArrayBuffer): Float32Array {
     );
   }
   return out;
+}
+
+/** Camera basis as columns (right, up, forward), heading from north, and
+ * the tangent of half the vertical field of view. On a portrait screen the
+ * page's cards cover the middle, so the view widens and tilts until the
+ * horizon sits about a third of the way down: the aurora then shows above
+ * the cards and the land or water below them. */
+function camera(
+  site: Site,
+  width: number,
+  height: number,
+): { cam: Float32Array; tanY: number } {
+  const aspect = (width || 1) / (height || 1);
+  const portrait = Math.min(1, Math.max(0, (1 - aspect) / 0.45));
+  const fov = (site.fov + 15 * portrait) * RAD;
+  const tanY = Math.tan(fov / 2);
+  const landscape =
+    -Math.tan(site.pitch * RAD) / Math.tan((site.fov / 2) * RAD);
+  const horizon = landscape + (0.3 - landscape) * portrait;
+  const pitch = Math.atan(-horizon * tanY);
+  const yaw = site.heading * RAD;
+  const fwd = [
+    Math.sin(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+    Math.cos(yaw) * Math.cos(pitch),
+  ] as const;
+  const right = [Math.cos(yaw), 0, -Math.sin(yaw)] as const;
+  const cam = new Float32Array([
+    ...right,
+    fwd[1] * right[2] - fwd[2] * right[1],
+    fwd[2] * right[0] - fwd[0] * right[2],
+    fwd[0] * right[1] - fwd[1] * right[0],
+    ...fwd,
+  ]);
+  return { cam, tanY };
+}
+
+/** A direction to CSS pixels on a width × height screen, or null behind the
+ * camera. */
+function project(
+  view: { cam: Float32Array; tanY: number },
+  width: number,
+  height: number,
+  d: Vec3,
+): [number, number] | null {
+  const { cam, tanY } = view;
+  const w = width || 1;
+  const h = height || 1;
+  const z = d[0] * cam[6]! + d[1] * cam[7]! + d[2] * cam[8]!;
+  if (z <= 0) return null;
+  const nx =
+    (d[0] * cam[0]! + d[1] * cam[1]! + d[2] * cam[2]!) / (z * tanY * (w / h));
+  const ny = (d[0] * cam[3]! + d[1] * cam[4]! + d[2] * cam[5]!) / (z * tanY);
+  return [((nx + 1) / 2) * w, ((1 - ny) / 2) * h];
+}
+
+/** Ridge elevation by azimuth (degrees), radians; what is below it is
+ * hidden. Straight between samples, as the ridge mesh is drawn. */
+function ridgeFor(site: Site): (az: number) => number {
+  const skyline = SKYLINES[site.id];
+  if (!skyline) return () => -Math.PI / 2;
+  const elev = new Int16Array(bytes(skyline.elev).buffer);
+  return (az) => {
+    const x = (az - skyline.from) / skyline.step;
+    const i = Math.floor(x);
+    const a = elev[i] ?? elev[i + 1] ?? -9000;
+    const b = elev[i + 1] ?? a;
+    return ((a + (b - a) * (x - i)) / 100) * RAD;
+  };
+}
+
+// The 22° halo's radius, and the height of the sun (its y) above which the
+// pillar is gone, as the sky draws them (sun() in aurora.shaders.ts).
+const HALO = 0.384;
+const PILLAR_TOP = 0.11;
+
+/** Points around a circle of angular radius r about d (its centre too when
+ * r is small enough to be a disc), as world directions. */
+function ring(d: Vec3, r: number, n: number, centre: boolean): Vec3[] {
+  // A basis across the line of sight: level, then up the sky.
+  let e1: Vec3 = [d[2], 0, -d[0]];
+  const l = Math.hypot(e1[0], e1[2]);
+  e1 = l > 1e-9 ? [e1[0] / l, 0, e1[2] / l] : [1, 0, 0];
+  const e2: Vec3 = [
+    d[1] * e1[2] - d[2] * e1[1],
+    d[2] * e1[0] - d[0] * e1[2],
+    d[0] * e1[1] - d[1] * e1[0],
+  ];
+  const [c, s] = [Math.cos(r), Math.sin(r)];
+  const out: Vec3[] = centre ? [d] : [];
+  for (let k = 0; k < n; k++) {
+    const t = (2 * Math.PI * k) / n;
+    const [u, v] = [Math.cos(t) * s, Math.sin(t) * s];
+    out.push([
+      d[0] * c + e1[0] * u + e2[0] * v,
+      d[1] * c + e1[1] * u + e2[1] * v,
+      d[2] * c + e1[2] * u + e2[2] * v,
+    ]);
+  }
+  return out;
+}
+
+/** What a site's view shows on a width × height screen (see Seer). A point
+ * shows when it is in frame and above the skyline the ridge mesh draws. */
+function seer(site: Site, width: number, height: number): Seer {
+  const [w, h] = [width || 1, height || 1];
+  const view = camera(site, w, h);
+  const ridge = ridgeFor(site);
+  const fwd = [view.cam[6]!, view.cam[7]!, view.cam[8]!];
+  // From the middle of the frame to its corner: nothing farther is in frame.
+  const reach = Math.atan(Math.hypot(view.tanY * (w / h), view.tanY));
+  const shows = (p: Vec3) => {
+    if (Math.asin(p[1]) < ridge(Math.atan2(p[0], p[2]) / RAD)) return false;
+    const xy = project(view, w, h, p);
+    return !!xy && xy[0] >= 0 && xy[0] <= w && xy[1] >= 0 && xy[1] <= h;
+  };
+  // How far beyond `edge` of the frame's middle d is, and below `above`.
+  const far = (d: Vec3, edge: number, above: number) => {
+    const cos = d[0] * fwd[0]! + d[1] * fwd[1]! + d[2] * fwd[2]!;
+    const off = Math.acos(Math.min(1, Math.max(-1, cos)));
+    return Math.max(off - reach - edge, above - Math.asin(d[1]));
+  };
+  return {
+    disc: (d, r, above) => {
+      const gap = far(d, r, above);
+      if (gap > 0) return gap;
+      // The centre and 16 points round the rim: a sliver counts.
+      return ring(d, r, 16, true).some(shows) ? 0 : 1e-6;
+    },
+    halo: (sun, r) => {
+      const gap = far(sun, HALO, SUN_UP);
+      if (gap > 0) return gap;
+      // The ring is drawn too faintly to see on its own (and not at all over
+      // the aurora), so it counts only beside the sun's own disc, and only
+      // when a quarter of it shows (18 of 72 points, 5° apart round it).
+      if (ring(sun, r, 16, true).some(shows)) {
+        let ringShows = 0;
+        for (const p of ring(sun, HALO, 72, false)) {
+          if (shows(p) && ++ringShows >= 18) return 0;
+        }
+      }
+      // The pillar over a low sun (below about 6°, as the sky draws it): at
+      // least 2° of it, sampled every half degree up to 6° above the sun.
+      if (sun[1] >= PILLAR_TOP) return 1e-6;
+      const alt = Math.asin(sun[1]);
+      const az = Math.atan2(sun[0], sun[2]);
+      let pillarShows = 0;
+      for (let k = 1; k <= 12; k++) {
+        const up = alt + k * 0.5 * RAD;
+        const c = Math.cos(up);
+        const p: Vec3 = [Math.sin(az) * c, Math.sin(up), Math.cos(az) * c];
+        if (shows(p) && ++pillarShows >= 4) return 0;
+      }
+      return 1e-6;
+    },
+  };
 }
 
 function start(init: Extract<AuroraMessage, { type: "init" }>): void {
@@ -355,36 +517,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let tilt = [0, 0];
   // Ridge elevation by azimuth (degrees), radians; what is below it is hidden.
   let ridgeAt = (_az: number) => -Math.PI / 2;
-  let cam = new Float32Array(9);
+  let cam: Float32Array = new Float32Array(9);
   let tanY = 1;
-  // Camera basis as columns (right, up, forward), heading from north. On a
-  // portrait screen the page's cards cover the middle, so the view widens and
-  // tilts until the horizon sits about a third of the way down: the aurora then
-  // shows above the cards and the land or water below them.
-  const aim = () => {
-    const aspect = (width || 1) / (height || 1);
-    const portrait = Math.min(1, Math.max(0, (1 - aspect) / 0.45));
-    const fov = (site.fov + 15 * portrait) * RAD;
-    tanY = Math.tan(fov / 2);
-    const landscape =
-      -Math.tan(site.pitch * RAD) / Math.tan((site.fov / 2) * RAD);
-    const horizon = landscape + (0.3 - landscape) * portrait;
-    const pitch = Math.atan(-horizon * tanY);
-    const yaw = site.heading * RAD;
-    const fwd = [
-      Math.sin(yaw) * Math.cos(pitch),
-      Math.sin(pitch),
-      Math.cos(yaw) * Math.cos(pitch),
-    ] as const;
-    const right = [Math.cos(yaw), 0, -Math.sin(yaw)] as const;
-    cam = new Float32Array([
-      ...right,
-      fwd[1] * right[2] - fwd[2] * right[1],
-      fwd[2] * right[0] - fwd[0] * right[2],
-      fwd[0] * right[1] - fwd[1] * right[0],
-      ...fwd,
-    ]);
-  };
+  const aim = () => ({ cam, tanY } = camera(site, width, height));
   const place = (index: number) => {
     site = SITES[index] ?? SITES[0]!;
     // Field lines climb toward magnetic south at the site's dip.
@@ -394,13 +529,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     aim();
     const skyline = SKYLINES[site.id];
     const mesh = skyline ? ridgeMesh(skyline) : new Float32Array(0);
-    if (skyline) {
-      const elev = new Int16Array(bytes(skyline.elev).buffer);
-      ridgeAt = (az) =>
-        ((elev[Math.round((az - skyline.from) / skyline.step)] ?? -9000) /
-          100) *
-        RAD;
-    }
+    ridgeAt = ridgeFor(site);
     gl.bindBuffer(gl.ARRAY_BUFFER, ridgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
     ridgeCount = mesh.length / 4;
@@ -446,16 +575,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let figures: Record<string, number[]> = {};
   const figureOf = new Map<number, string>();
   // A direction to CSS pixels, or null behind the camera.
-  const screen = (d: Vec3): [number, number] | null => {
-    const w = width || 1;
-    const h = height || 1;
-    const z = d[0] * cam[6]! + d[1] * cam[7]! + d[2] * cam[8]!;
-    if (z <= 0) return null;
-    const nx =
-      (d[0] * cam[0]! + d[1] * cam[1]! + d[2] * cam[2]!) / (z * tanY * (w / h));
-    const ny = (d[0] * cam[3]! + d[1] * cam[4]! + d[2] * cam[5]!) / (z * tanY);
-    return [((nx + 1) / 2) * w, ((1 - ny) / 2) * h];
-  };
+  const screen = (d: Vec3) => project({ cam, tanY }, width, height, d);
   // Up and clear of the skyline.
   const clear = (d: Vec3, above: number) => {
     const alt = Math.asin(d[1]);
@@ -623,6 +743,39 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     const xy = screen(d);
     scope.postMessage({ pick: xy ? pick(xy[0], xy[1], 1) : null });
     if (!xy) held = NOTHING;
+  };
+
+  // Sun and moon times, while the page wants them: worked out fresh from the
+  // clock a slice at a time between frames, and again when a spell starts or
+  // ends, after local midnight, at least hourly, when the window changes size
+  // and when the tab is shown again (background timers can run late).
+  let wantTimes = false;
+  let timesRun = 0;
+  let timesTimer = 0;
+  const times = () => {
+    clearTimeout(timesTimer);
+    const run = ++timesRun;
+    if (!wantTimes) return;
+    const [w, h] = [width || 1, height || 1];
+    const seers = SITES.map((s) => seer(s, w, h));
+    const job = lookAhead(SITES, seers, wall());
+    const slice = () => {
+      if (run !== timesRun) return;
+      const step = job.next();
+      if (!step.done) {
+        timesTimer = self.setTimeout(slice, 0);
+        return;
+      }
+      scope.postMessage({
+        times: step.value.times,
+        zone: getSystemTimeZone(),
+      });
+      timesTimer = self.setTimeout(
+        times,
+        Math.max(step.value.next - wall(), 0) + 1000,
+      );
+    };
+    slice();
   };
 
   const quad = (program: WebGLProgram) => {
@@ -832,6 +985,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       resize();
       draw();
       follow();
+      times();
     } else if (data.type === "still") {
       still = data.still;
       stop();
@@ -840,11 +994,18 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     } else if (data.type === "hidden") {
       hidden = data.hidden;
       if (hidden) stop();
-      else run();
+      else {
+        run();
+        times();
+      }
     } else if (data.type === "pick") {
       scope.postMessage({ pick: pick(data.x, data.y, data.reach) });
     } else if (data.type === "drop") {
       held = NOTHING;
+    } else if (data.type === "times") {
+      if (data.want === wantTimes) return;
+      wantTimes = data.want;
+      times();
     }
   };
 }

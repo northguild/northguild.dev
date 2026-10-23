@@ -494,10 +494,12 @@ export type Sky = {
   planets: Float32Array;
 };
 
-export function sky(site: Site, ms: number): Sky {
+/** The clock and the world frame for a site at a moment: Julian day,
+ * Julian centuries of terrestrial time (for the orbits; sidereal time uses
+ * the clock), local sidereal time, latitude, the equatorial-to-world matrix
+ * and the obliquity. */
+function frame(site: Site, ms: number) {
   const jd = julian(ms);
-  // Julian centuries of terrestrial time for the orbits; sidereal time uses
-  // the clock.
   const t = (jd + DELTA_T - 2451545) / 36525;
   const gmst =
     (280.46061837 + 360.98564736629 * (jd - 2451545) + 0.000387933 * t * t) *
@@ -506,18 +508,66 @@ export function sky(site: Site, ms: number): Sky {
   const lat = site.lat * RAD;
   const hor = horizon(lat, lst);
   const eps = (23.4392911 - 0.0130042 * t) * RAD;
+  return { t, lst, lat, hor, eps };
+}
 
-  // Topocentric moon: subtract the observer's position from the geocentric one.
-  const [ml, mb, dist] = moonEcliptic(t);
-  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+/** Topocentric moon (km, equatorial of date): the geocentric position less
+ * the observer's. */
+function topocentric(geo: Vec3, lat: number, lst: number): Vec3 {
   const u = Math.atan(0.99664719 * Math.tan(lat));
   const rc = 6378.14 * Math.cos(u);
   const rs = 6378.14 * 0.99664719 * Math.sin(u);
-  const topo: Vec3 = [
+  return [
     geo[0] - rc * Math.cos(lst),
     geo[1] - rc * Math.sin(lst),
     geo[2] - rs,
   ];
+}
+
+/** Just the sun and moon, for looking ahead: world directions, the moon's
+ * age as its elongation east of the sun in ecliptic longitude (0 new, π
+ * full, radians in 0..2π), and the fraction of its disc lit. */
+/** The sun's angular radius (radians) from its distance. */
+function sunRadiusAt(t: number): number {
+  const m = (357.52911 + 35999.05029 * t) * RAD;
+  const au = 1.00014 - 0.01671 * Math.cos(m) - 0.00014 * Math.cos(2 * m);
+  return (959.63 / au) * ARCSEC;
+}
+
+export function sunAndMoon(
+  site: Site,
+  ms: number,
+): {
+  sun: Vec3;
+  sunRadius: number;
+  moon: Vec3;
+  moonRadius: number;
+  age: number;
+  lit: number;
+} {
+  const { t, lst, lat, hor, eps } = frame(site, ms);
+  const [ml, mb, dist] = moonEcliptic(t);
+  const sl = sunLongitude(t);
+  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+  const topo = topocentric(geo, lat, lst);
+  const age = (((ml - sl) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  return {
+    sun: lift(normalize(apply(hor, ecliptic(sl, 0, eps)))),
+    sunRadius: sunRadiusAt(t),
+    moon: lift(normalize(apply(hor, topo))),
+    moonRadius: Math.asin(1737.4 / Math.hypot(...topo)),
+    age,
+    lit: (1 - Math.cos(mb) * Math.cos(age)) / 2,
+  };
+}
+
+export function sky(site: Site, ms: number): Sky {
+  const { t, lst, lat, hor, eps } = frame(site, ms);
+
+  // Topocentric moon: subtract the observer's position from the geocentric one.
+  const [ml, mb, dist] = moonEcliptic(t);
+  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+  const topo = topocentric(geo, lat, lst);
   const range = Math.hypot(...topo);
   const moon = normalize(apply(hor, topo));
   const sun = normalize(apply(hor, ecliptic(sunLongitude(t), 0, eps)));
