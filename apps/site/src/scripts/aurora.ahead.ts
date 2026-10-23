@@ -32,7 +32,8 @@ export type Seer = {
   /** Any part of a disc (centre d, angular radius r) in frame and clear of
    * the skyline, while its centre is above `above` (radians). */
   disc: (d: Vec3, r: number, above: number) => number;
-  /** The sun's pillar while it is low (2° of it at least), or a quarter of
+  /** The sun's pillar where it is drawn at half strength or more (a sun
+   * below about 4°, the 2° above it; 1° of that at least), or a quarter of
    * its 22° halo while its disc (radius r) shows too: in frame and clear of
    * the skyline, while the sun is up (as the sky draws them). */
   halo: (sun: Vec3, r: number) => number;

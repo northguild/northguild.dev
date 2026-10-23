@@ -301,10 +301,11 @@ function ridgeFor(site: Site): (az: number) => number {
   };
 }
 
-// The 22° halo's radius, and the height of the sun (its y) above which the
-// pillar is gone, as the sky draws them (sun() in aurora.shaders.ts).
+// The 22° halo's radius, and the sun's height (its y) above which the pillar
+// is drawn at less than half strength: sun() in aurora.shaders.ts scales it
+// by 1 - smoothstep(0.03, 0.11, y), which is 0.5 at y = 0.07 (about 4°).
 const HALO = 0.384;
-const PILLAR_TOP = 0.11;
+const PILLAR_TOP = 0.07;
 
 /** Points around a circle of angular radius r about d (its centre too when
  * r is small enough to be a disc), as world directions. */
@@ -371,17 +372,19 @@ function seer(site: Site, width: number, height: number): Seer {
           if (shows(p) && ++ringShows >= 18) return 0;
         }
       }
-      // The pillar over a low sun (below about 6°, as the sky draws it): at
-      // least 2° of it, sampled every half degree up to 6° above the sun.
+      // The pillar, only where it is drawn at half strength or more, like
+      // the sun: a sun below about 4°, and the 2° just above it (the shader
+      // fades it by exp(-dAlt / 0.05), a half at 2°). At least 1° of that
+      // must show: 2 of 4 points, half a degree apart.
       if (sun[1] >= PILLAR_TOP) return 1e-6;
       const alt = Math.asin(sun[1]);
       const az = Math.atan2(sun[0], sun[2]);
       let pillarShows = 0;
-      for (let k = 1; k <= 12; k++) {
+      for (let k = 1; k <= 4; k++) {
         const up = alt + k * 0.5 * RAD;
         const c = Math.cos(up);
         const p: Vec3 = [Math.sin(az) * c, Math.sin(up), Math.cos(az) * c];
-        if (shows(p) && ++pillarShows >= 4) return 0;
+        if (shows(p) && ++pillarShows >= 2) return 0;
       }
       return 1e-6;
     },
