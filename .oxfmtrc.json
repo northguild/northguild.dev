@@ -10,6 +10,7 @@
     "**/*.md",
     "**/*.yaml",
     "pnpm-lock.yaml",
-    "apps/site/public/star-names.json"
+    "apps/site/public/star-names.json",
+    "apps/site/public/constellations.json"
   ]
 }
