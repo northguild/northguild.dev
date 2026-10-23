@@ -298,9 +298,13 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   for (const type of ["pointerenter", "focus"]) {
     info?.addEventListener(type, () => want(true));
   }
-  info?.addEventListener("pointerleave", () => {
-    if (!popover?.matches(":popover-open")) want(false);
-  });
+  // Leaving the button without opening the popover stops the search. Focus
+  // moving into the open popover keeps it.
+  for (const type of ["pointerleave", "blur"]) {
+    info?.addEventListener(type, () => {
+      if (!popover?.matches(":popover-open")) want(false);
+    });
+  }
 
   // Tooltips: over bare sky the page asks the worker what is drawn under the
   // pointer (at most once a frame) and names it.
