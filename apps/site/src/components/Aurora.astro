@@ -5,6 +5,10 @@ import {
   compass,
   coords,
 } from "../scripts/aurora.sites";
+// The installed @northguild/gmt's version, read at build time so the footer
+// follows every upgrade. The package does not export its package.json, so
+// it is read by path; only the version string reaches the page.
+import { version as gmtVersion } from "../../node_modules/@northguild/gmt/package.json";
 ---
 
 <div class="aurora" aria-hidden="true">
@@ -138,6 +142,9 @@ import {
       ))
     }
   </dl>
+  <p class="sky-footer">
+    Site runs on <a href="/gmt/">@northguild/gmt</a> v{gmtVersion}
+  </p>
 </div>
 
 <script>
@@ -702,6 +709,22 @@ import {
   .sky-times li.now .when {
     color: var(--gmt-cyan);
   }
+  /* A quiet footer under the credits. */
+  .sky-info .sky-footer {
+    margin: 0.6rem 0 0;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--gmt-hairline);
+  }
+  .sky-footer a {
+    color: var(--gmt-ice);
+    text-decoration-color: var(--gmt-hairline);
+    text-underline-offset: 0.2em;
+  }
+  .sky-footer a:hover,
+  .sky-footer a:focus-visible {
+    color: var(--gmt-cyan);
+  }
+
   .sky-times li.note {
     display: block;
     margin-top: 0.1rem;
