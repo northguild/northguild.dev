@@ -524,16 +524,21 @@ function topocentric(geo: Vec3, lat: number, lst: number): Vec3 {
   ];
 }
 
-/** Just the sun and moon, for looking ahead: world directions, the moon's
- * age as its elongation east of the sun in ecliptic longitude (0 new, π
- * full, radians in 0..2π), and the fraction of its disc lit. */
-/** The sun's angular radius (radians) from its distance. */
-function sunRadiusAt(t: number): number {
+/** The sun's distance (au), for t in Julian centuries. */
+function sunDistance(t: number): number {
   const m = (357.52911 + 35999.05029 * t) * RAD;
-  const au = 1.00014 - 0.01671 * Math.cos(m) - 0.00014 * Math.cos(2 * m);
-  return (959.63 / au) * ARCSEC;
+  return 1.00014 - 0.01671 * Math.cos(m) - 0.00014 * Math.cos(2 * m);
 }
 
+/** The sun's angular radius (radians) from its distance. */
+function sunRadiusAt(t: number): number {
+  return (959.63 / sunDistance(t)) * ARCSEC;
+}
+
+/** Just the sun and moon, for looking ahead: world directions (lifted by
+ * refraction, as drawn) and angular radii, the moon's age as its elongation
+ * east of the sun in ecliptic longitude (0 new, π full, radians in 0..2π),
+ * and the fraction of its disc lit. */
 export function sunAndMoon(
   site: Site,
   ms: number,
@@ -577,9 +582,8 @@ export function sky(site: Site, ms: number): Sky {
   const moonRadius = Math.asin(1737.4 / range);
 
   // Solar eclipse: how much of the sun's disc the moon leaves showing.
-  const m = (357.52911 + 35999.05029 * t) * RAD;
-  const au = 1.00014 - 0.01671 * Math.cos(m) - 0.00014 * Math.cos(2 * m);
-  const sunRadius = (959.63 / au) * ARCSEC;
+  const au = sunDistance(t);
+  const sunRadius = sunRadiusAt(t);
   const sunVisible = uncovered(
     sunRadius,
     moonRadius,
