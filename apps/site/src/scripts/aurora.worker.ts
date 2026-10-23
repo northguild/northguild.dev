@@ -77,9 +77,27 @@ export type AuroraMessage =
   /** What is drawn near this point (CSS pixels), within reach pixels. */
   | { type: "pick"; x: number; y: number; reach: number };
 
-/** The sun, moon, a planet or a named star as drawn, in CSS pixels from the
- * canvas's corner; note is "Planet" or a star's constellation. */
-export type SkyLabel = { name: string; note: string; x: number; y: number };
+/** One unbroken run of a constellation line in CSS pixels, [x, y, x, y, …],
+ * drawn from the end nearer the hovered star; step counts lines out from it. */
+export type SkyLine = { step: number; points: number[] };
+
+/** The sun, moon, a planet or a star as drawn, in CSS pixels from the
+ * canvas's corner; note is "Planet", a named star's constellation, or empty
+ * when the name already says it ("ζ Herculis"). A star in a constellation
+ * also brings its stick figure as it shows now: in front of the mountains and
+ * above the horizon. */
+export type SkyLabel = {
+  name: string;
+  note: string;
+  x: number;
+  y: number;
+  figure?: string;
+  lines?: SkyLine[];
+};
+
+/** A star's label (see scripts/build-stars.mjs): record index, name or
+ * designation, constellation, and 0 if the name already says it. */
+type StarName = [number, string, string?, 0?];
 
 /** To the page: the frame is up ("on"), we gave up ("off"), the site drawn,
  * or the answer to a pick (for the tooltips). */
@@ -413,33 +431,131 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     aim();
   };
 
-  // What the page's pointer is over: the nearest sun, moon, planet or named
+  // What the page's pointer is over: the nearest sun, moon, planet or
   // star within reach that is up, clear of the skyline, bright enough to be
   // drawn and in frame.
   let starDirs: Float32Array | null = null;
-  let named: [number, string, string][] = [];
+  let named: StarName[] = [];
+  // Constellation stick figures by name, as star index pairs.
+  let figures: Record<string, number[]> = {};
+  // A direction to CSS pixels, or null behind the camera.
+  const screen = (d: Vec3): [number, number] | null => {
+    const w = width || 1;
+    const h = height || 1;
+    const z = d[0] * cam[6]! + d[1] * cam[7]! + d[2] * cam[8]!;
+    if (z <= 0) return null;
+    const nx =
+      (d[0] * cam[0]! + d[1] * cam[1]! + d[2] * cam[2]!) / (z * tanY * (w / h));
+    const ny = (d[0] * cam[3]! + d[1] * cam[4]! + d[2] * cam[5]!) / (z * tanY);
+    return [((nx + 1) / 2) * w, ((1 - ny) / 2) * h];
+  };
+  // Up and clear of the skyline.
+  const clear = (d: Vec3, above: number) => {
+    const alt = Math.asin(d[1]);
+    return alt >= above && alt >= ridgeAt(Math.atan2(d[0], d[2]) / RAD);
+  };
+  const starAt = (i: number): Vec3 => {
+    const s = starDirs!;
+    return apply(now.stars, [s[i * 5]!, s[i * 5 + 1]!, s[i * 5 + 2]!]);
+  };
+  // A figure's lines, counted out from the hovered star or the figure's star
+  // nearest it (parts it does not reach follow on), stopping short of each
+  // star and cut wherever they pass below the horizon or behind the mountains.
+  const figureLines = (pairs: number[], star: number): SkyLine[] => {
+    let from = star;
+    if (!pairs.includes(star)) {
+      const s = starAt(star);
+      let near = -2;
+      for (const i of pairs) {
+        const d = starAt(i);
+        const dot = d[0] * s[0] + d[1] * s[1] + d[2] * s[2];
+        if (dot > near) [near, from] = [dot, i];
+      }
+    }
+    const step = new Map<number, number>([[from, 0]]);
+    let queue = [from];
+    let next = 0;
+    while (step.size < new Set(pairs).size) {
+      if (!queue.length) {
+        const rest = pairs.find((i) => !step.has(i))!;
+        step.set(rest, ++next);
+        queue = [rest];
+      }
+      const at = queue.shift()!;
+      const n = step.get(at)!;
+      next = Math.max(next, n);
+      for (let k = 0; k < pairs.length; k += 2) {
+        const [a, b] = [pairs[k]!, pairs[k + 1]!];
+        const other = a === at ? b : b === at ? a : -1;
+        if (other >= 0 && !step.has(other)) {
+          step.set(other, n + 1);
+          queue.push(other);
+        }
+      }
+    }
+    // 6 CSS pixels clear of each star, in radians at the middle of the view.
+    const gap = (6 * 2 * tanY) / (height || 1);
+    const out: SkyLine[] = [];
+    for (let k = 0; k < pairs.length; k += 2) {
+      let [a, b] = [pairs[k]!, pairs[k + 1]!];
+      if (step.get(b)! < step.get(a)!) [a, b] = [b, a];
+      const [da, db] = [starAt(a), starAt(b)];
+      const cos = da[0] * db[0] + da[1] * db[1] + da[2] * db[2];
+      const angle = Math.acos(Math.min(1, Math.max(-1, cos)));
+      if (angle <= 2 * gap) continue;
+      // Along the great circle in steps of at most half a degree.
+      const n = Math.max(2, Math.ceil((angle - 2 * gap) / (0.5 * RAD)));
+      let run: number[] = [];
+      const end = () => {
+        if (run.length >= 4) out.push({ step: step.get(a)!, points: run });
+        run = [];
+      };
+      for (let i = 0; i <= n; i++) {
+        const f = gap + ((angle - 2 * gap) * i) / n;
+        const [ka, kb] = [Math.sin(angle - f), Math.sin(f)];
+        const s = Math.sin(angle);
+        const d: Vec3 = [
+          (ka * da[0] + kb * db[0]) / s,
+          (ka * da[1] + kb * db[1]) / s,
+          (ka * da[2] + kb * db[2]) / s,
+        ];
+        const xy = clear(d, 0) ? screen(d) : null;
+        if (!xy) {
+          end();
+          continue;
+        }
+        run.push(Math.round(xy[0] * 10) / 10, Math.round(xy[1] * 10) / 10);
+      }
+      end();
+    }
+    return out;
+  };
   const pick = (px: number, py: number, reach: number): SkyLabel | null => {
     const w = width || 1;
     const h = height || 1;
     const limit = site.limit - 2 * now.moonlight;
     let best: SkyLabel | null = null;
+    let bestStar = -1;
+    let bestFigure = "";
     let nearest = reach * reach;
-    const consider = (name: string, note: string, d: Vec3, above: number) => {
-      const alt = Math.asin(d[1]);
-      if (alt < above || alt < ridgeAt(Math.atan2(d[0], d[2]) / RAD)) return;
-      const z = d[0] * cam[6]! + d[1] * cam[7]! + d[2] * cam[8]!;
-      if (z <= 0) return;
-      const nx =
-        (d[0] * cam[0]! + d[1] * cam[1]! + d[2] * cam[2]!) /
-        (z * tanY * (w / h));
-      const ny =
-        (d[0] * cam[3]! + d[1] * cam[4]! + d[2] * cam[5]!) / (z * tanY);
-      if (Math.abs(nx) > 1 || Math.abs(ny) > 1) return;
-      const x = ((nx + 1) / 2) * w;
-      const y = ((1 - ny) / 2) * h;
+    const consider = (
+      name: string,
+      note: string,
+      d: Vec3,
+      above: number,
+      star = -1,
+      figure = "",
+    ) => {
+      if (!clear(d, above)) return;
+      const xy = screen(d);
+      if (!xy) return;
+      const [x, y] = xy;
+      if (x < 0 || x > w || y < 0 || y > h) return;
       const dist = (x - px) ** 2 + (y - py) ** 2;
       if (dist >= nearest) return;
       nearest = dist;
+      bestStar = star;
+      bestFigure = figure;
       best = { name, note, x: Math.round(x), y: Math.round(y) };
     };
     // Fainter near the horizon, as the star shader draws it.
@@ -454,12 +570,21 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     });
     const s = starDirs;
     if (s) {
-      for (const [i, name, constellation] of named) {
-        const d = apply(now.stars, [s[i * 5]!, s[i * 5 + 1]!, s[i * 5 + 2]!]);
-        if (seen(s[i * 5 + 3]!, d)) consider(name, constellation, d, 0);
+      for (const [i, name, constellation = "", quiet] of named) {
+        const d = starAt(i);
+        if (!seen(s[i * 5 + 3]!, d)) continue;
+        const note = quiet === 0 ? "" : constellation;
+        consider(name, note, d, 0, i, constellation);
       }
     }
-    return best;
+    const found = best as SkyLabel | null;
+    const pairs = found && bestStar >= 0 ? figures[bestFigure] : undefined;
+    if (!found || !pairs) return found;
+    return {
+      ...found,
+      figure: bestFigure,
+      lines: figureLines(pairs, bestStar),
+    };
   };
 
   const quad = (program: WebGLProgram) => {
@@ -639,7 +764,12 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       return fetch(new URL("/star-names.json", self.location.origin));
     })
     .then((res) => (res?.ok ? res.json() : []))
-    .then((list: [number, string, string][]) => (named = list))
+    .then((list: StarName[]) => {
+      named = list;
+      return fetch(new URL("/constellations.json", self.location.origin));
+    })
+    .then((res) => (res.ok ? res.json() : {}))
+    .then((list: Record<string, number[]>) => (figures = list))
     .catch(() => {});
 
   scope.onmessage = ({ data }) => {

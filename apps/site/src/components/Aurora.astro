@@ -10,6 +10,9 @@ import {
 <div class="aurora" aria-hidden="true">
   <canvas></canvas>
 </div>
+<!-- The hovered star's constellation, traced out from it over the sky and
+     under the page's cards. -->
+<svg class="sky-lines" aria-hidden="true"></svg>
 
 <!-- A faint info glyph, shown once the sky is running. It opens the details
      and credits for whichever site this visit drew. -->
@@ -92,6 +95,7 @@ import {
   import type {
     AuroraMessage,
     SkyLabel,
+    SkyLine,
     WorkerMessage,
   } from "../scripts/aurora.worker";
 
@@ -204,19 +208,113 @@ import {
     target === document.documentElement ||
     target === document.body ||
     (target instanceof HTMLElement && target.tagName === "MAIN");
-  const label = (found: SkyLabel | null) => {
+
+  // The tooltip rises into place out of a soft blur, and fades away. Timing
+  // comes from the theme's enter tokens; reduced motion keeps only the fade.
+  const root = getComputedStyle(document.documentElement);
+  const enter = {
+    duration: parseFloat(root.getPropertyValue("--gmt-enter-duration")) * 1000 || 500,
+    easing: root.getPropertyValue("--gmt-enter-easing").trim() || "ease-out",
+  };
+  const calm = matchMedia("(prefers-reduced-motion: reduce)");
+  let naming = "";
+  let fade: Animation | null = null;
+  const name = (found: SkyLabel | null) => {
     if (!tip) return;
-    tip.hidden = !found || !over || !canvas?.classList.contains("on");
-    if (!found || tip.hidden) return;
-    const note = document.createElement("span");
-    note.textContent = found.note;
-    tip.replaceChildren(found.name, ...(found.note ? [note] : []));
+    if (!found) {
+      if (!naming) return;
+      naming = "";
+      const from = getComputedStyle(tip).opacity;
+      fade?.cancel();
+      fade = tip.animate([{ opacity: from }, { opacity: 0 }], {
+        duration: 200,
+        easing: "ease-in",
+        fill: "forwards",
+      });
+      fade.onfinish = () => {
+        if (!naming) tip.hidden = true;
+      };
+      return;
+    }
+    const fresh = found.name !== naming;
+    if (fresh) {
+      naming = found.name;
+      tip.hidden = false;
+      const note = document.createElement("span");
+      note.textContent = found.note;
+      tip.replaceChildren(found.name, ...(found.note ? [note] : []));
+    }
     // Centred on the object, but kept inside the window at the sides.
     const half = tip.offsetWidth / 2 + 4;
     const width = document.documentElement.clientWidth;
     tip.style.left = `${Math.min(Math.max(found.x, half), width - half)}px`;
     tip.style.top = `${found.y}px`;
     tip.classList.toggle("below", found.y < 48);
+    if (!fresh) return;
+    const rise = tip.classList.contains("below") ? -6 : 6;
+    fade?.cancel();
+    fade = tip.animate(
+      calm.matches
+        ? [{ opacity: 0 }, { opacity: 1 }]
+        : [
+            {
+              opacity: 0,
+              transform: `translateY(${rise}px) scale(0.94)`,
+              filter: "blur(4px)",
+            },
+            { opacity: 1, transform: "none", filter: "blur(0)" },
+          ],
+      enter,
+    );
+  };
+
+  // Constellation lines: each run draws itself out from the hovered star, a
+  // step at a time, and the whole figure fades away a moment after the
+  // pointer leaves. Moving to another star of the same constellation keeps it.
+  const sketch = document.querySelector<SVGSVGElement>(".sky-lines");
+  let figure = "";
+  let wipe = 0;
+  const trace = (found: SkyLabel | null) => {
+    if (!sketch) return;
+    const next = (found?.lines && found.figure) || "";
+    if (next === figure) {
+      if (next) {
+        clearTimeout(wipe);
+        sketch.classList.remove("out");
+      }
+      return;
+    }
+    if (!next) {
+      sketch.classList.add("out");
+      clearTimeout(wipe);
+      wipe = window.setTimeout(() => {
+        sketch.replaceChildren();
+        figure = "";
+      }, 1200);
+      return;
+    }
+    clearTimeout(wipe);
+    figure = next;
+    sketch.classList.remove("out");
+    sketch.replaceChildren(
+      ...(found?.lines ?? []).map(({ step, points }: SkyLine) => {
+        const line = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "polyline",
+        );
+        line.setAttribute("points", points.join(" "));
+        line.setAttribute("pathLength", "1");
+        line.style.setProperty("--step", String(step));
+        return line;
+      }),
+    );
+  };
+
+  const label = (found: SkyLabel | null) => {
+    const shown =
+      found && over && canvas?.classList.contains("on") ? found : null;
+    name(shown);
+    trace(shown);
   };
   const point = (event: PointerEvent) => {
     over = bare(event.target);
@@ -343,6 +441,54 @@ import {
   }
   .sky-tip.below {
     translate: -50% 12px;
+  }
+
+  /* Under the cards, over the sky. Each polyline has pathLength 1, so a dash
+     of 1 offset by 1 is the line not yet drawn. */
+  .sky-lines {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    filter: drop-shadow(
+      0 0 3px color(from var(--gmt-cyan) srgb r g b / 0.6)
+    );
+    transition: opacity var(--gmt-duration-med) var(--gmt-easing);
+  }
+  .sky-lines.out {
+    opacity: 0;
+    transition: opacity 0.7s var(--gmt-easing) 0.3s;
+  }
+  .sky-lines :global(polyline) {
+    fill: none;
+    stroke: color(from var(--gmt-ice) srgb r g b / 0.45);
+    stroke-width: 1;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: sky-trace 0.6s var(--gmt-enter-easing) forwards;
+    animation-delay: calc(var(--step) * 0.16s);
+  }
+  @keyframes sky-trace {
+    from {
+      stroke-dashoffset: 1;
+      opacity: 0;
+    }
+    40% {
+      opacity: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sky-lines :global(polyline) {
+      animation-delay: 0s;
+    }
   }
   .sky-tip[hidden] {
     display: none;
