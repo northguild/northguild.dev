@@ -7,12 +7,18 @@
 // Record, 6 bytes little-endian: ra uint16 (0..65536 = 0..360°),
 // dec int16 (±32767 = ±90°), vmag uint8 ((V + 2) × 20), b-v int8 (× 50).
 //
-// Also builds apps/site/public/star-names.json for the sky's tooltips: the
-// IAU Catalog of Star Names (WGSN), matched by HR number, as
-// [record index, name, constellation] for each named star kept above.
+// Also builds apps/site/public/star-names.json for the sky's tooltips, one
+// entry for every star kept above, sorted by record index:
+// - [index, name, constellation] for a star in the IAU Catalog of Star Names
+//   (WGSN), matched by HR number: "Sarin", "Hercules".
+// - [index, designation, constellation, 0] for any other star with a Bayer
+//   letter or Flamsteed number in the catalogue: "ζ Herculis", "Hercules".
+//   The 0 says the label already names the constellation.
+// - [index, "HR n"] for the rest, by Bright Star number alone.
 
 import { writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
+import { CONSTELLATIONS, GENITIVES } from "./constellation-names.mjs";
 
 const SOURCE = "http://tdc-www.harvard.edu/catalogs/bsc5.dat.gz";
 const LIMIT = 5.5;
@@ -32,9 +38,40 @@ const text = gunzipSync(Buffer.from(await res.arrayBuffer())).toString(
 // Byte ranges from the catalogue ReadMe (1-based, inclusive).
 const field = (line, from, to) => line.slice(from - 1, to).trim();
 
+// Bayer letters as the catalogue abbreviates them.
+const GREEK = {
+  Alp: "α",
+  Bet: "β",
+  Gam: "γ",
+  Del: "δ",
+  Eps: "ε",
+  Zet: "ζ",
+  Eta: "η",
+  The: "θ",
+  Iot: "ι",
+  Kap: "κ",
+  Lam: "λ",
+  Mu: "μ",
+  Nu: "ν",
+  Xi: "ξ",
+  Omi: "ο",
+  Pi: "π",
+  Rho: "ρ",
+  Sig: "σ",
+  Tau: "τ",
+  Ups: "υ",
+  Phi: "φ",
+  Chi: "χ",
+  Psi: "ψ",
+  Ome: "ω",
+};
+const SUPERSCRIPT = ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
+
 const stars = [];
 /** Record index by HR (Bright Star) number. */
 const byHr = new Map();
+/** Fallback label for each record, by index: designation or HR number. */
+const designations = [];
 for (const line of text.split("\n")) {
   const raH = field(line, 76, 77);
   const vmag = field(line, 103, 107);
@@ -54,7 +91,26 @@ for (const line of text.split("\n")) {
       Number(field(line, 87, 88)) / 60 +
       Number(field(line, 89, 90)) / 3600);
   const bv = Number(field(line, 110, 114) || "0.6");
-  byHr.set(Number(field(line, 1, 4)), stars.length);
+  const hr = Number(field(line, 1, 4));
+  // Name field: Flamsteed number, Bayer letter, its superscript, constellation.
+  const [flamsteed, bayer, index, con] = [
+    field(line, 5, 7),
+    field(line, 8, 10),
+    field(line, 11, 11),
+    field(line, 12, 14),
+  ];
+  const genitive = GENITIVES[con];
+  const letter = GREEK[bayer];
+  designations.push(
+    genitive && (letter || flamsteed)
+      ? [
+          `${letter ? letter + (index ? SUPERSCRIPT[Number(index)] : "") : flamsteed} ${genitive}`,
+          CONSTELLATIONS[con],
+          0,
+        ]
+      : [`HR ${hr}`],
+  );
+  byHr.set(hr, stars.length);
   stars.push({ ra, dec, v, bv });
 }
 
@@ -68,98 +124,6 @@ stars.forEach(({ ra, dec, v, bv }, i) => {
 });
 writeFileSync(OUT, buf);
 console.log(`${stars.length} stars, ${buf.length} bytes`);
-
-// The 88 constellations by IAU abbreviation.
-const CONSTELLATIONS = {
-  And: "Andromeda",
-  Ant: "Antlia",
-  Aps: "Apus",
-  Aqr: "Aquarius",
-  Aql: "Aquila",
-  Ara: "Ara",
-  Ari: "Aries",
-  Aur: "Auriga",
-  Boo: "Boötes",
-  Cae: "Caelum",
-  Cam: "Camelopardalis",
-  Cnc: "Cancer",
-  CVn: "Canes Venatici",
-  CMa: "Canis Major",
-  CMi: "Canis Minor",
-  Cap: "Capricornus",
-  Car: "Carina",
-  Cas: "Cassiopeia",
-  Cen: "Centaurus",
-  Cep: "Cepheus",
-  Cet: "Cetus",
-  Cha: "Chamaeleon",
-  Cir: "Circinus",
-  Col: "Columba",
-  Com: "Coma Berenices",
-  CrA: "Corona Australis",
-  CrB: "Corona Borealis",
-  Crv: "Corvus",
-  Crt: "Crater",
-  Cru: "Crux",
-  Cyg: "Cygnus",
-  Del: "Delphinus",
-  Dor: "Dorado",
-  Dra: "Draco",
-  Equ: "Equuleus",
-  Eri: "Eridanus",
-  For: "Fornax",
-  Gem: "Gemini",
-  Gru: "Grus",
-  Her: "Hercules",
-  Hor: "Horologium",
-  Hya: "Hydra",
-  Hyi: "Hydrus",
-  Ind: "Indus",
-  Lac: "Lacerta",
-  Leo: "Leo",
-  LMi: "Leo Minor",
-  Lep: "Lepus",
-  Lib: "Libra",
-  Lup: "Lupus",
-  Lyn: "Lynx",
-  Lyr: "Lyra",
-  Men: "Mensa",
-  Mic: "Microscopium",
-  Mon: "Monoceros",
-  Mus: "Musca",
-  Nor: "Norma",
-  Oct: "Octans",
-  Oph: "Ophiuchus",
-  Ori: "Orion",
-  Pav: "Pavo",
-  Peg: "Pegasus",
-  Per: "Perseus",
-  Phe: "Phoenix",
-  Pic: "Pictor",
-  Psc: "Pisces",
-  PsA: "Piscis Austrinus",
-  Pup: "Puppis",
-  Pyx: "Pyxis",
-  Ret: "Reticulum",
-  Sge: "Sagitta",
-  Sgr: "Sagittarius",
-  Sco: "Scorpius",
-  Scl: "Sculptor",
-  Sct: "Scutum",
-  Ser: "Serpens",
-  Sex: "Sextans",
-  Tau: "Taurus",
-  Tel: "Telescopium",
-  Tri: "Triangulum",
-  TrA: "Triangulum Australe",
-  Tuc: "Tucana",
-  UMa: "Ursa Major",
-  UMi: "Ursa Minor",
-  Vel: "Vela",
-  Vir: "Virgo",
-  Vol: "Volans",
-  Vul: "Vulpecula",
-};
 
 // Fixed-width columns, located from the header row.
 const namesRes = await fetch(NAMES);
@@ -182,7 +146,13 @@ for (const line of lines) {
   const con = line.slice(conAt, conAt + 3).trim();
   names.push([index, name, CONSTELLATIONS[con] ?? con]);
 }
+const proper = new Set(names.map(([index]) => index));
+designations.forEach((label, index) => {
+  if (!proper.has(index)) names.push([index, ...label]);
+});
 names.sort((a, b) => a[0] - b[0]);
 const json = JSON.stringify(names);
 writeFileSync(NAMES_OUT, json);
-console.log(`${names.length} star names, ${json.length} bytes`);
+console.log(
+  `${proper.size} star names, ${names.length - proper.size} designations, ${json.length} bytes`,
+);
