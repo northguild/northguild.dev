@@ -29,6 +29,7 @@ import { SITES } from "./aurora.sites";
 import {
   PLANETS,
   apply,
+  lift,
   columns,
   sky,
   type Sky,
@@ -460,10 +461,12 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     const alt = Math.asin(d[1]);
     return alt >= above && alt >= ridgeAt(Math.atan2(d[0], d[2]) / RAD);
   };
-  const starAt = (i: number): Vec3 => {
+  // True direction, and where it is seen (lifted by refraction, as drawn).
+  const starTrue = (i: number): Vec3 => {
     const s = starDirs!;
     return apply(now.stars, [s[i * 5]!, s[i * 5 + 1]!, s[i * 5 + 2]!]);
   };
+  const starAt = (i: number): Vec3 => lift(starTrue(i));
   // A figure's lines, counted out from the hovered star or the figure's star
   // nearest it (parts it does not reach follow on), stopping short of each
   // star and cut wherever they pass below the horizon or behind the mountains.
@@ -505,7 +508,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     for (let k = 0; k < pairs.length; k += 2) {
       let [a, b] = [pairs[k]!, pairs[k + 1]!];
       if (step.get(b)! < step.get(a)!) [a, b] = [b, a];
-      const [da, db] = [starAt(a), starAt(b)];
+      // Along the true great circle, each point then lifted as drawn.
+      const [da, db] = [starTrue(a), starTrue(b)];
       const cos = da[0] * db[0] + da[1] * db[1] + da[2] * db[2];
       const angle = Math.acos(Math.min(1, Math.max(-1, cos)));
       if (angle <= 2 * gap) continue;
@@ -520,11 +524,11 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
         const f = gap + ((angle - 2 * gap) * i) / n;
         const [ka, kb] = [Math.sin(angle - f), Math.sin(f)];
         const s = Math.sin(angle);
-        const d: Vec3 = [
+        const d = lift([
           (ka * da[0] + kb * db[0]) / s,
           (ka * da[1] + kb * db[1]) / s,
           (ka * da[2] + kb * db[2]) / s,
-        ];
+        ]);
         const xy = clear(d, 0) ? screen(d) : null;
         if (!xy) {
           end();
@@ -543,7 +547,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let held = NOTHING;
   const planetAt = (k: number): Vec3 => {
     const p = now.planets;
-    return apply(now.stars, [p[k * 5]!, p[k * 5 + 1]!, p[k * 5 + 2]!]);
+    return lift(apply(now.stars, [p[k * 5]!, p[k * 5 + 1]!, p[k * 5 + 2]!]));
   };
   const pick = (px: number, py: number, reach: number): SkyLabel | null => {
     const w = width || 1;
@@ -576,7 +580,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     // Fainter near the horizon, as the star shader draws it.
     const seen = (mag: number, d: Vec3) =>
       mag + 0.12 * (1 / (Math.max(d[1], 0) + 0.04) - 1) < limit;
-    consider("Sun", "", now.sun, -0.83 * RAD, SUN);
+    // Seen from its upper limb on the horizon (now.sun is lifted by refraction).
+    consider("Sun", "", now.sun, -now.sunRadius, SUN);
     consider("Moon", "", now.moon, 0, LUNA);
     PLANETS.forEach((name, k) => {
       const d = planetAt(k);

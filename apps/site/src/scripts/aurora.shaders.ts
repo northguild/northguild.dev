@@ -168,7 +168,7 @@ vec3 moon(vec3 rd) {
   float cm = dot(rd, uMoon.xyz);
   // Daylight washes the moon out: half as bright while the sun is up, so the
   // sun always outshines it.
-  float washed = 1.0 - 0.5 * smoothstep(-0.0145, 0.03, uSun.y);
+  float washed = 1.0 - 0.5 * smoothstep(-0.0047, 0.0347, uSun.y);
   // The same soft glow as the sun's, as strong as the moon is full and lit.
   float full = (0.5 - 0.5 * dot(uSun, uMoon.xyz)) * sunlit(-uMoon.xyz);
   float a = acos(clamp(cm, -1.0, 1.0));
@@ -204,7 +204,9 @@ vec3 moon(vec3 rd) {
 // Halo colours run in the theme's order where real ones run red to blue.
 const float HALO = 0.3840;  // 22° halo radius
 vec3 sun(vec3 rd) {
-  float up = smoothstep(-0.0145, 0.03, uSun.y);
+  // uSun is where the sun is seen (lifted by refraction): it shows from its
+  // upper limb on the horizon, its centre a semi-diameter (0.27°) below.
+  float up = smoothstep(-0.0047, 0.0347, uSun.y);
   if (up <= 0.0) return vec3(0.0);
   float cs = dot(rd, uSun);
   float a = acos(clamp(cs, -1.0, 1.0));
@@ -386,8 +388,21 @@ uniform float uPx, uT, uLimit, uFade;
 // 1 for planets, which hardly twinkle.
 uniform float uSteady;
 varying vec3 vCol;
+// Atmospheric refraction: the direction lifted as it is seen, same azimuth.
+// NOAA's formula, as lift() in aurora.sky.ts.
+vec3 lift(vec3 w) {
+  float e = degrees(asin(clamp(w.y, -1.0, 1.0)));
+  float h = length(w.xz);
+  if (e > 85.0 || h < 1e-6) return w;
+  float t = tan(radians(e));
+  float r = e > 5.0 ? 58.1 / t - 0.07 / (t * t * t) + 0.000086 / pow(t, 5.0)
+    : e > -0.575 ? 1735.0 + e * (-518.2 + e * (103.4 + e * (-12.79 + e * 0.711)))
+    : -20.774 / t;
+  float a = radians(e + r / 3600.0);
+  return vec3(w.xz.x * cos(a) / h, sin(a), w.xz.y * cos(a) / h);
+}
 void main() {
-  vec3 w = uStars * aDir;
+  vec3 w = lift(uStars * aDir);
   float alt = w.y;
   float m = aMag.x + 0.12 * (1.0 / (max(alt, 0.0) + 0.04) - 1.0);
   float b = pow(2.512, -m);

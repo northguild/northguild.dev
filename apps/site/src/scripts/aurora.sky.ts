@@ -437,6 +437,34 @@ function uncovered(a: number, b: number, d: number): number {
   return 1 - lens / (Math.PI * a * a);
 }
 
+/** Atmospheric refraction (degrees) for a geometric altitude (degrees):
+ * how much the air lifts what is seen there. NOAA's solar calculator formula
+ * (after Saemundsson and Bennett), about 34′ at the horizon, 9′ at 5°, 0′ at
+ * the zenith; the same one baldurpan.com uses for the sun over Ísafjörður. */
+export function refraction(alt: number): number {
+  if (alt > 85) return 0;
+  const t = Math.tan(alt * RAD);
+  const arcsec =
+    alt > 5
+      ? 58.1 / t - 0.07 / t ** 3 + 0.000086 / t ** 5
+      : alt > -0.575
+        ? 1735 + alt * (-518.2 + alt * (103.4 + alt * (-12.79 + alt * 0.711)))
+        : -20.774 / t;
+  return arcsec / 3600;
+}
+
+/** A world direction as it is seen: lifted by refraction, same azimuth.
+ * Everything drawn in the sky goes through this (stars and planets in the
+ * star shader's copy); orbits and eclipses keep the true directions. */
+export function lift(d: Vec3): Vec3 {
+  const alt = Math.asin(Math.min(1, Math.max(-1, d[1]))) / RAD;
+  const h = Math.hypot(d[0], d[2]);
+  if (alt > 85 || h < 1e-9) return d;
+  const seen = (alt + refraction(alt)) * RAD;
+  const c = Math.cos(seen) / h;
+  return [d[0] * c, Math.sin(seen), d[2] * c];
+}
+
 const normalize = (v: Vec3): Vec3 => {
   const l = Math.hypot(v[0], v[1], v[2]);
   return [v[0] / l, v[1] / l, v[2] / l];
@@ -529,12 +557,14 @@ export function sky(site: Site, ms: number): Sky {
   const lit = (1 - dot(sun, moon)) / 2;
   const alt = Math.asin(moon[1]) / RAD;
   const up = Math.min(1, Math.max(0, (alt + 2) / 17));
+  // Drawn where they are seen: lifted by refraction. The eclipse geometry
+  // above keeps the true directions.
   return {
     stars: mul(hor, precession(t)),
-    moon,
+    moon: lift(moon),
     moonRadius,
     moonNorth,
-    sun,
+    sun: lift(sun),
     sunRadius,
     sunVisible,
     shadow,
