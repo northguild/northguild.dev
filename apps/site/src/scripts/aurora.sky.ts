@@ -6,6 +6,8 @@
 // need). The planets use JPL's mean Keplerian elements (good to a few arcminutes over
 // 1800–2050) and Meeus ch. 41 for their brightness.
 
+import { convertUnixToUtc, getUnixNow, totalDuration } from "@northguild/gmt";
+import { taiMinusUtc } from "@northguild/gmt/timescale";
 import type { Site } from "./aurora.sites";
 
 export type Mat3 = [
@@ -24,11 +26,16 @@ export type Vec3 = [number, number, number];
 const RAD = Math.PI / 180;
 const ARCSEC = RAD / 3600;
 
-const julian = (ms: number) => ms / 86400000 + 2440587.5;
-// Terrestrial time runs ΔT ahead of the clock (UTC): 32.184 s plus 37 leap
-// seconds since 2017. The moon moves half an arcsecond a second, so the
-// orbit formulas need it.
-const DELTA_T = 69.184;
+// Julian day from epoch milliseconds: day 2440587.5 began at the epoch.
+const DAY = totalDuration("P1D", "milliseconds")!;
+const julian = (ms: number) => ms / DAY + 2440587.5;
+// Terrestrial time runs ahead of the clock (UTC) by 32.184 s plus the leap
+// seconds so far (TAI − UTC, from gmt's table; read once, as none is due
+// within the year we look ahead). The moon moves half an arcsecond a second,
+// so the orbit formulas need it. In days.
+const DELTA_T =
+  (32.184 + (taiMinusUtc(convertUnixToUtc(getUnixNow() ?? 0)) ?? 37)) /
+  totalDuration("P1D", "seconds")!;
 
 /** Row-major 3×3 product a·b. */
 function mul(a: Mat3, b: Mat3): Mat3 {
@@ -430,6 +437,34 @@ function uncovered(a: number, b: number, d: number): number {
   return 1 - lens / (Math.PI * a * a);
 }
 
+/** Atmospheric refraction (degrees) for a geometric altitude (degrees):
+ * how much the air lifts what is seen there. NOAA's solar calculator formula
+ * (after Saemundsson and Bennett), about 34′ at the horizon, 9′ at 5°, 0′ at
+ * the zenith; the same one baldurpan.com uses for the sun over Ísafjörður. */
+export function refraction(alt: number): number {
+  if (alt > 85) return 0;
+  const t = Math.tan(alt * RAD);
+  const arcsec =
+    alt > 5
+      ? 58.1 / t - 0.07 / t ** 3 + 0.000086 / t ** 5
+      : alt > -0.575
+        ? 1735 + alt * (-518.2 + alt * (103.4 + alt * (-12.79 + alt * 0.711)))
+        : -20.774 / t;
+  return arcsec / 3600;
+}
+
+/** A world direction as it is seen: lifted by refraction, same azimuth.
+ * Everything drawn in the sky goes through this (stars and planets in the
+ * star shader's copy); orbits and eclipses keep the true directions. */
+export function lift(d: Vec3): Vec3 {
+  const alt = Math.asin(Math.min(1, Math.max(-1, d[1]))) / RAD;
+  const h = Math.hypot(d[0], d[2]);
+  if (alt > 85 || h < 1e-9) return d;
+  const seen = (alt + refraction(alt)) * RAD;
+  const c = Math.cos(seen) / h;
+  return [d[0] * c, Math.sin(seen), d[2] * c];
+}
+
 const normalize = (v: Vec3): Vec3 => {
   const l = Math.hypot(v[0], v[1], v[2]);
   return [v[0] / l, v[1] / l, v[2] / l];
@@ -459,11 +494,13 @@ export type Sky = {
   planets: Float32Array;
 };
 
-export function sky(site: Site, ms: number): Sky {
+/** The clock and the world frame for a site at a moment: Julian day,
+ * Julian centuries of terrestrial time (for the orbits; sidereal time uses
+ * the clock), local sidereal time, latitude, the equatorial-to-world matrix
+ * and the obliquity. */
+function frame(site: Site, ms: number) {
   const jd = julian(ms);
-  // Julian centuries of terrestrial time for the orbits; sidereal time uses
-  // the clock.
-  const t = (jd + DELTA_T / 86400 - 2451545) / 36525;
+  const t = (jd + DELTA_T - 2451545) / 36525;
   const gmst =
     (280.46061837 + 360.98564736629 * (jd - 2451545) + 0.000387933 * t * t) *
     RAD;
@@ -471,18 +508,71 @@ export function sky(site: Site, ms: number): Sky {
   const lat = site.lat * RAD;
   const hor = horizon(lat, lst);
   const eps = (23.4392911 - 0.0130042 * t) * RAD;
+  return { t, lst, lat, hor, eps };
+}
 
-  // Topocentric moon: subtract the observer's position from the geocentric one.
-  const [ml, mb, dist] = moonEcliptic(t);
-  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+/** Topocentric moon (km, equatorial of date): the geocentric position less
+ * the observer's. */
+function topocentric(geo: Vec3, lat: number, lst: number): Vec3 {
   const u = Math.atan(0.99664719 * Math.tan(lat));
   const rc = 6378.14 * Math.cos(u);
   const rs = 6378.14 * 0.99664719 * Math.sin(u);
-  const topo: Vec3 = [
+  return [
     geo[0] - rc * Math.cos(lst),
     geo[1] - rc * Math.sin(lst),
     geo[2] - rs,
   ];
+}
+
+/** The sun's distance (au), for t in Julian centuries. */
+function sunDistance(t: number): number {
+  const m = (357.52911 + 35999.05029 * t) * RAD;
+  return 1.00014 - 0.01671 * Math.cos(m) - 0.00014 * Math.cos(2 * m);
+}
+
+/** The sun's angular radius (radians) from its distance. */
+function sunRadiusAt(t: number): number {
+  return (959.63 / sunDistance(t)) * ARCSEC;
+}
+
+/** Just the sun and moon, for looking ahead: world directions (lifted by
+ * refraction, as drawn) and angular radii, the moon's age as its elongation
+ * east of the sun in ecliptic longitude (0 new, π full, radians in 0..2π),
+ * and the fraction of its disc lit. */
+export function sunAndMoon(
+  site: Site,
+  ms: number,
+): {
+  sun: Vec3;
+  sunRadius: number;
+  moon: Vec3;
+  moonRadius: number;
+  age: number;
+  lit: number;
+} {
+  const { t, lst, lat, hor, eps } = frame(site, ms);
+  const [ml, mb, dist] = moonEcliptic(t);
+  const sl = sunLongitude(t);
+  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+  const topo = topocentric(geo, lat, lst);
+  const age = (((ml - sl) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  return {
+    sun: lift(normalize(apply(hor, ecliptic(sl, 0, eps)))),
+    sunRadius: sunRadiusAt(t),
+    moon: lift(normalize(apply(hor, topo))),
+    moonRadius: Math.asin(1737.4 / Math.hypot(...topo)),
+    age,
+    lit: (1 - Math.cos(mb) * Math.cos(age)) / 2,
+  };
+}
+
+export function sky(site: Site, ms: number): Sky {
+  const { t, lst, lat, hor, eps } = frame(site, ms);
+
+  // Topocentric moon: subtract the observer's position from the geocentric one.
+  const [ml, mb, dist] = moonEcliptic(t);
+  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+  const topo = topocentric(geo, lat, lst);
   const range = Math.hypot(...topo);
   const moon = normalize(apply(hor, topo));
   const sun = normalize(apply(hor, ecliptic(sunLongitude(t), 0, eps)));
@@ -492,9 +582,8 @@ export function sky(site: Site, ms: number): Sky {
   const moonRadius = Math.asin(1737.4 / range);
 
   // Solar eclipse: how much of the sun's disc the moon leaves showing.
-  const m = (357.52911 + 35999.05029 * t) * RAD;
-  const au = 1.00014 - 0.01671 * Math.cos(m) - 0.00014 * Math.cos(2 * m);
-  const sunRadius = (959.63 / au) * ARCSEC;
+  const au = sunDistance(t);
+  const sunRadius = sunRadiusAt(t);
   const sunVisible = uncovered(
     sunRadius,
     moonRadius,
@@ -522,12 +611,14 @@ export function sky(site: Site, ms: number): Sky {
   const lit = (1 - dot(sun, moon)) / 2;
   const alt = Math.asin(moon[1]) / RAD;
   const up = Math.min(1, Math.max(0, (alt + 2) / 17));
+  // Drawn where they are seen: lifted by refraction. The eclipse geometry
+  // above keeps the true directions.
   return {
     stars: mul(hor, precession(t)),
-    moon,
+    moon: lift(moon),
     moonRadius,
     moonNorth,
-    sun,
+    sun: lift(sun),
     sunRadius,
     sunVisible,
     shadow,

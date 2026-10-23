@@ -10,7 +10,7 @@
     "preview": "wrangler dev"
   },
   "dependencies": {
-    "@northguild/gmt": "^1.19.0",
+    "@northguild/gmt": "^1.20.0",
     "@northguild/theme": "workspace:*",
     "astro": "7.2.7"
   },

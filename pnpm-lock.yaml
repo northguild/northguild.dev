@@ -30,8 +30,8 @@ importers:
   apps/site:
     dependencies:
       '@northguild/gmt':
-        specifier: ^1.19.0
-        version: 1.19.0
+        specifier: ^1.20.0
+        version: 1.20.0
       '@northguild/theme':
         specifier: workspace:*
         version: link:../../packages/theme
@@ -1065,8 +1065,8 @@ packages:
     peerDependencies:
       oxlint: '>=1.0.0'
 
-  '@northguild/gmt@1.19.0':
-    resolution: {integrity: sha512-RWOyb9G4z57t1wF2j7TrHivHW/MHFQHI8Ub63tWUIwhzBhf968gh84wvvBOrzc5GI36GkZbVJxOPj6Rj+ymSDA==}
+  '@northguild/gmt@1.20.0':
+    resolution: {integrity: sha512-mrykNrPuYW7fxGronTxUYhK5UDfQ66DIIA/vMuwr3wW3jBlZb4WxwG/MF7isdMcadAZJ5rCWeV90AQKq3XuNXg==}
     engines: {node: '>=22.16.0'}
 
   '@oslojs/encoding@1.1.0':
@@ -3451,7 +3451,7 @@ snapshots:
     dependencies:
       oxlint: 1.89.0
 
-  '@northguild/gmt@1.19.0':
+  '@northguild/gmt@1.20.0':
     dependencies:
       '@js-temporal/polyfill': 0.5.1
 
