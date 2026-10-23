@@ -6,6 +6,8 @@
 // need). The planets use JPL's mean Keplerian elements (good to a few arcminutes over
 // 1800–2050) and Meeus ch. 41 for their brightness.
 
+import { convertUnixToUtc, getUnixNow, totalDuration } from "@northguild/gmt";
+import { taiMinusUtc } from "@northguild/gmt/timescale";
 import type { Site } from "./aurora.sites";
 
 export type Mat3 = [
@@ -24,11 +26,16 @@ export type Vec3 = [number, number, number];
 const RAD = Math.PI / 180;
 const ARCSEC = RAD / 3600;
 
-const julian = (ms: number) => ms / 86400000 + 2440587.5;
-// Terrestrial time runs ΔT ahead of the clock (UTC): 32.184 s plus 37 leap
-// seconds since 2017. The moon moves half an arcsecond a second, so the
-// orbit formulas need it.
-const DELTA_T = 69.184;
+// Julian day from epoch milliseconds: day 2440587.5 began at the epoch.
+const DAY = totalDuration("P1D", "milliseconds")!;
+const julian = (ms: number) => ms / DAY + 2440587.5;
+// Terrestrial time runs ahead of the clock (UTC) by 32.184 s plus the leap
+// seconds so far (TAI − UTC, from gmt's table; read once, as none is due
+// within the year we look ahead). The moon moves half an arcsecond a second,
+// so the orbit formulas need it. In days.
+const DELTA_T =
+  (32.184 + (taiMinusUtc(convertUnixToUtc(getUnixNow() ?? 0)) ?? 37)) /
+  totalDuration("P1D", "seconds")!;
 
 /** Row-major 3×3 product a·b. */
 function mul(a: Mat3, b: Mat3): Mat3 {
@@ -463,7 +470,7 @@ export function sky(site: Site, ms: number): Sky {
   const jd = julian(ms);
   // Julian centuries of terrestrial time for the orbits; sidereal time uses
   // the clock.
-  const t = (jd + DELTA_T / 86400 - 2451545) / 36525;
+  const t = (jd + DELTA_T - 2451545) / 36525;
   const gmst =
     (280.46061837 + 360.98564736629 * (jd - 2451545) + 0.000387933 * t * t) *
     RAD;
