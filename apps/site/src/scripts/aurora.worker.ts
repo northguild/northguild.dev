@@ -7,7 +7,8 @@
 //    and, when it is up, the sun and its ice halos.
 // 3. Stars from the Bright Star Catalogue and the planets, then the sparks,
 //    added on top.
-// 4. The mountain skyline, drawn last so it hides everything behind it.
+// 4. The mountain skyline, which hides everything behind it.
+// 5. Now and then a raven, nearer than anything else (see aurora.raven.ts).
 // The page sends the theme token values, sizes and visibility; we answer "on"
 // once a frame is up and "off" if we give up.
 
@@ -17,6 +18,10 @@ import {
   MAP_W,
   POINT_FS,
   QUAD_VS,
+  RAVEN_BLIT_FS,
+  RAVEN_BLIT_VS,
+  RAVEN_FS,
+  RAVEN_VS,
   RIDGE_FS,
   RIDGE_VS,
   SPARK_VS,
@@ -26,6 +31,7 @@ import {
 import { getSystemTimeZone, getUnixNow } from "@northguild/gmt";
 import { SUN_UP, lookAhead, type Seer, type SiteTimes } from "./aurora.ahead";
 import { MOON } from "./aurora.moon";
+import { RAVEN_STRIDE, RAVEN_TIMING, raven } from "./aurora.raven";
 import { SITES, type Site } from "./aurora.sites";
 import {
   PLANETS,
@@ -44,6 +50,9 @@ const BASE_SCALE = 0.6;
 const MAX_EDGE = 1280;
 const SPARKS = 4000;
 const RAD = Math.PI / 180;
+/** The raven's own texture, square: big enough that scaling it down to the
+ * bird's size on screen smooths its edges. */
+const RAVEN_TEX = 256;
 
 // Wall-clock epoch milliseconds from Temporal (via gmt): the stars, planets,
 // moon and sun need the real time. Frame timing uses rAF stamps, not the wall
@@ -407,6 +416,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   const stars = compile(gl, STAR_VS, POINT_FS);
   const ridge = compile(gl, RIDGE_VS, RIDGE_FS);
   if (!foot || !skyProgram || !sparks || !stars || !ridge) return;
+  // Without these the sky still runs, just with no raven.
+  const ravenProgram = compile(gl, RAVEN_VS, RAVEN_FS);
+  const ravenBlit = compile(gl, RAVEN_BLIT_VS, RAVEN_BLIT_FS);
 
   const [voidC, spring, cyan, teal, purple, ice] = parseColours(init.colours);
   const colours: Record<string, Rgb | undefined> = {
@@ -469,6 +481,56 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     bytes(MOON.data),
   );
   params(gl.LINEAR, gl.REPEAT);
+
+  // The raven's texture on unit 2, mipmapped, with a depth buffer to draw it.
+  gl.activeTexture(gl.TEXTURE2);
+  const ravenTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, ravenTex);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    RAVEN_TEX,
+    RAVEN_TEX,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    null,
+  );
+  params(gl.LINEAR, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(
+    gl.TEXTURE_2D,
+    gl.TEXTURE_MIN_FILTER,
+    gl.LINEAR_MIPMAP_LINEAR,
+  );
+  const ravenFbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ravenFbo);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    gl.COLOR_ATTACHMENT0,
+    gl.TEXTURE_2D,
+    ravenTex,
+    0,
+  );
+  const depth = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+  gl.renderbufferStorage(
+    gl.RENDERBUFFER,
+    gl.DEPTH_COMPONENT16,
+    RAVEN_TEX,
+    RAVEN_TEX,
+  );
+  gl.framebufferRenderbuffer(
+    gl.FRAMEBUFFER,
+    gl.DEPTH_ATTACHMENT,
+    gl.RENDERBUFFER,
+    depth,
+  );
+  const ravenOk =
+    !!ravenProgram &&
+    !!ravenBlit &&
+    gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0);
 
   const buffer = (data: Float32Array) => {
@@ -478,6 +540,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     return b;
   };
   const tri = buffer(new Float32Array([-1, -1, 3, -1, -1, 3]));
+  const square = buffer(new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
+  const ravenBuf = gl.createBuffer();
   const seeds = buffer(Float32Array.from({ length: SPARKS * 4 }, Math.random));
   const ridgeBuf = gl.createBuffer();
   let ridgeCount = 0;
@@ -495,8 +559,11 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     }
     gl.uniform1i(gl.getUniformLocation(program, "uMap"), 0);
     gl.uniform1i(gl.getUniformLocation(program, "uMoonTex"), 1);
+    gl.uniform1i(gl.getUniformLocation(program, "uRaven"), 2);
   };
   for (const p of [foot, skyProgram, sparks, stars, ridge]) setup(p);
+  if (ravenProgram && ravenBlit)
+    for (const p of [ravenProgram, ravenBlit]) setup(p);
   const at = (program: WebGLProgram, name: string) =>
     gl.getUniformLocation(program, name);
 
@@ -523,6 +590,15 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let cam: Float32Array = new Float32Array(9);
   let tanY = 1;
   const aim = () => ({ cam, tanY } = camera(site, width, height));
+  // The raven, planned in the view as it is when a flight starts.
+  const bird = raven(RAVEN_TIMING);
+  const ravenView = () => ({
+    cam,
+    tanY,
+    aspect: (width || 1) / (height || 1),
+    eye: site.eye,
+    ridge: ridgeAt,
+  });
   const place = (index: number) => {
     site = SITES[index] ?? SITES[0]!;
     // Field lines climb toward magnetic south at the site's dip.
@@ -882,6 +958,79 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     const r = attrib(ridge, "aRidge", ridgeBuf, 4);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, ridgeCount);
     gl.disableVertexAttribArray(r);
+
+    // 5. The raven, in front of everything.
+    if (ravenOk && bird.count) drawRaven(view, tan);
+  };
+
+  // The raven into its texture with the camera cropped to it, then the
+  // texture, scaled down, over the frame.
+  const drawRaven = (view: (program: WebGLProgram) => void, tan: number[]) => {
+    const [W, H] = [canvas.width, canvas.height];
+    const m = bird.mesh;
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    let [near, far] = [Infinity, 0];
+    for (let i = 0; i < bird.count * RAVEN_STRIDE; i += RAVEN_STRIDE) {
+      const [x, y, z] = [m[i]!, m[i + 1]!, m[i + 2]!];
+      const cz = x * cam[6]! + y * cam[7]! + z * cam[8]!;
+      if (cz < 0.5) return;
+      const cx = (x * cam[0]! + y * cam[1]! + z * cam[2]!) / (cz * tan[0]!);
+      const cy = (x * cam[3]! + y * cam[4]! + z * cam[5]!) / (cz * tan[1]!);
+      [x0, x1] = [Math.min(x0, cx), Math.max(x1, cx)];
+      [y0, y1] = [Math.min(y0, cy), Math.max(y1, cy)];
+      [near, far] = [Math.min(near, cz), Math.max(far, cz)];
+    }
+    if (x1 < -1 || x0 > 1 || y1 < -1 || y0 > 1) return;
+    // A square crop in pixels, with a margin so the texture's edge is clear.
+    const half = Math.max((x1 - x0) * W, (y1 - y0) * H) / 4 + 2;
+    const rect = [
+      (x0 + x1) / 2,
+      (y0 + y1) / 2,
+      (2 * half) / W,
+      (2 * half) / H,
+    ] as const;
+    [near, far] = [Math.max(0.1, near - 0.5), far + 0.5];
+    const rp = ravenProgram!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ravenFbo);
+    gl.viewport(0, 0, RAVEN_TEX, RAVEN_TEX);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    view(rp);
+    gl.uniform4f(at(rp, "uCrop"), ...rect);
+    gl.uniform2f(
+      at(rp, "uDepth"),
+      (far + near) / (far - near),
+      (2 * far * near) / (near - far),
+    );
+    gl.uniform4f(at(rp, "uMoon"), ...now.moon, now.moonRadius);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ravenBuf);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      m.subarray(0, bird.count * RAVEN_STRIDE),
+      gl.DYNAMIC_DRAW,
+    );
+    const a = attrib(rp, "aPos", ravenBuf, 3, 4 * RAVEN_STRIDE, 0);
+    const b = attrib(rp, "aNormal", ravenBuf, 3, 4 * RAVEN_STRIDE, 12);
+    gl.drawArrays(gl.TRIANGLES, 0, bird.count);
+    gl.disableVertexAttribArray(a);
+    gl.disableVertexAttribArray(b);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.activeTexture(gl.TEXTURE0);
+
+    const bp = ravenBlit!;
+    gl.useProgram(bp);
+    gl.uniform4f(at(bp, "uRect"), ...rect);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    const q = attrib(bp, "aPos", square, 2);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.disableVertexAttribArray(q);
+    gl.disable(gl.BLEND);
   };
 
   const stop = () => {
@@ -925,7 +1074,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     const elapsed = stamp - last;
     if (elapsed < FRAME_MS - 2) return;
     if (last) {
-      t += Math.min(elapsed, 100) / 1000;
+      const dt = Math.min(elapsed, 100) / 1000;
+      t += dt;
+      bird.step(dt, ravenView());
       adapt(elapsed);
     }
     last = stamp;
@@ -976,6 +1127,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (level > 2) return;
     if (data.type === "site") {
       held = NOTHING;
+      bird.reset();
       place(data.site);
       skyAt = wall();
       now = sky(site, skyAt);
@@ -991,6 +1143,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       times();
     } else if (data.type === "still") {
       still = data.still;
+      // A raven held still in mid-air would look wrong: it waits instead.
+      if (still) bird.reset();
       stop();
       draw();
       run();
