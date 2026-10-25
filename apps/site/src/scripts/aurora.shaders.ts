@@ -466,3 +466,70 @@ void main() {
   gl_FragColor = vec4(1.0 - exp(-col * 1.7), 1.0);
 }
 `;
+
+// The raven (see aurora.raven.ts), drawn into its own small texture: the
+// same camera, cropped to the bird so it fills the texture (uCrop: the crop's
+// centre and half size in screen coordinates), with depth just around it
+// (uDepth). Black plumage lit only faintly: by the sky above (and a city's
+// glow), the moon, and a blue-purple sheen where the gloss catches the light.
+// Against the sky it reads as a silhouette, darkest against the aurora.
+export const RAVEN_VS = `
+precision highp float;
+${PROJECT}
+attribute vec3 aPos, aNormal;
+uniform vec4 uCrop;
+uniform vec2 uDepth;
+varying vec3 vN, vP;
+void main() {
+  vN = aNormal;
+  vP = aPos;
+  vec4 c = project(aPos);
+  gl_Position = vec4((c.xy - uCrop.xy * c.w) / uCrop.zw,
+    uDepth.x * c.w + uDepth.y, c.w);
+}
+`;
+
+export const RAVEN_FS = `
+precision highp float;
+uniform vec3 uVoid, uTeal, uIce, uCyan, uPurple;
+uniform vec4 uMoon;
+uniform float uMoonlight, uGlow;
+varying vec3 vN, vP;
+void main() {
+  vec3 v = normalize(-vP);
+  vec3 n = normalize(vN);
+  if (dot(n, v) < 0.0) n = -n;
+  float sky = 0.55 + 0.45 * n.y;
+  vec3 col = uVoid * 0.3 + (uTeal * 0.012 + uIce * 0.002) * sky * (1.0 + uGlow);
+  vec3 m = uMoon.xyz;
+  float moon = uMoonlight * smoothstep(-0.02, 0.05, m.y);
+  col += uIce * 0.03 * moon * max(dot(n, m), 0.0);
+  vec3 r = reflect(-v, n);
+  float gloss = pow(max(dot(r, m), 0.0), 16.0) * moon
+    + 0.25 * pow(max(r.y, 0.0), 6.0);
+  col += mix(uPurple, uCyan, 0.55) * 0.02 * gloss;
+  gl_FragColor = vec4(1.0 - exp(-col * 1.7), 1.0);
+}
+`;
+
+// The raven's texture laid over the frame at the crop (uRect: centre and half
+// size in screen coordinates), mipmapped so thin wings and fingers stay
+// smooth. Premultiplied: the texture's alpha is the bird's coverage, and
+// uAlpha fades the whole bird in and out at the ends of a flight.
+export const RAVEN_BLIT_VS = `
+attribute vec2 aPos;
+uniform vec4 uRect;
+varying vec2 vUv;
+void main() {
+  vUv = aPos * 0.5 + 0.5;
+  gl_Position = vec4(uRect.xy + aPos * uRect.zw, 0.0, 1.0);
+}
+`;
+
+export const RAVEN_BLIT_FS = `
+precision mediump float;
+uniform sampler2D uRaven;
+uniform float uAlpha;
+varying vec2 vUv;
+void main() { gl_FragColor = texture2D(uRaven, vUv) * uAlpha; }
+`;
