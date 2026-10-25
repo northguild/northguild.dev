@@ -166,13 +166,25 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     "--gmt-ice",
   ];
 
-  // The worker picks the first site from the browser's time zone (Finland:
-  // Helsinki, Iceland: Ísafjörður, else at random) and reports it; the
-  // visitor can switch in the popover, which always shows the site drawn.
-  let site = 0;
+  // The visitor can switch site in the popover, which always shows the site
+  // drawn. The last site they chose is kept in this browser and drawn again
+  // on the next visit or reload; until they choose, the worker picks from the
+  // browser's time zone (Finland: Helsinki, Iceland: Ísafjörður, else at
+  // random) and reports it.
+  const SITE_KEY = "northguild.sky.site";
   const sections = [
     ...document.querySelectorAll<HTMLElement>("#sky-info [data-site]"),
   ];
+  const ids = sections.map((el) => el.dataset.site ?? "");
+  // Storage can be blocked or throw (private windows, blocked site data).
+  const chosen = (() => {
+    try {
+      return ids.indexOf(localStorage.getItem(SITE_KEY) ?? "");
+    } catch {
+      return -1;
+    }
+  })();
+  let site = Math.max(chosen, 0);
   const choices = [
     ...document.querySelectorAll<HTMLButtonElement>(".sky-sites button"),
   ];
@@ -208,7 +220,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           width: canvas.clientWidth,
           height: canvas.clientHeight,
           colours: TOKENS.map((name) => style.getPropertyValue(name).trim()),
-          site: -1,
+          site: chosen,
           still: motion.matches,
           hidden: document.hidden,
         },
@@ -473,6 +485,11 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   // reports the new frame is up.
   choices.forEach((button, i) =>
     button.addEventListener("click", () => {
+      // Kept even when it is the site already drawn, which may have come
+      // from the time zone or at random.
+      try {
+        localStorage.setItem(SITE_KEY, ids[i] ?? "");
+      } catch {}
       if (i === site) return;
       site = i;
       show();
