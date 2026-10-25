@@ -241,8 +241,9 @@ function starData(buf: ArrayBuffer): Float32Array {
   return out;
 }
 
-/** Camera basis as columns (right, up, forward), heading from north, and
- * the tangent of half the vertical field of view. On a portrait screen the
+/** Camera basis as columns (right, up, forward), heading from north, the
+ * tangent of half the vertical field of view, and how far the screen counts
+ * as portrait (0 landscape, 1 most phones). On a portrait screen the
  * page's cards cover the middle, so the view widens and tilts until the
  * horizon sits about a third of the way down: the aurora then shows above
  * the cards and the land or water below them. */
@@ -250,7 +251,7 @@ function camera(
   site: Site,
   width: number,
   height: number,
-): { cam: Float32Array; tanY: number } {
+): { cam: Float32Array; tanY: number; portrait: number } {
   const aspect = (width || 1) / (height || 1);
   const portrait = Math.min(1, Math.max(0, (1 - aspect) / 0.45));
   const fov = (site.fov + 15 * portrait) * RAD;
@@ -273,7 +274,7 @@ function camera(
     fwd[0] * right[1] - fwd[1] * right[0],
     ...fwd,
   ]);
-  return { cam, tanY };
+  return { cam, tanY, portrait };
 }
 
 /** A direction to CSS pixels on a width × height screen, or null behind the
@@ -589,7 +590,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let ridgeAt = (_az: number) => -Math.PI / 2;
   let cam: Float32Array = new Float32Array(9);
   let tanY = 1;
-  const aim = () => ({ cam, tanY } = camera(site, width, height));
+  let portrait = 0;
+  const aim = () => ({ cam, tanY, portrait } = camera(site, width, height));
   // The raven, planned in the view as it is when a flight starts.
   const bird = raven(RAVEN_TIMING);
   const ravenView = () => ({
@@ -598,6 +600,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     aspect: (width || 1) / (height || 1),
     eye: site.eye,
     ridge: ridgeAt,
+    // Landscape: below the middle of the cards. Portrait: the cards sit
+    // below the horizon, so up toward the top of the frame.
+    ceiling: 0.3 + 0.55 * portrait,
   });
   const place = (index: number) => {
     site = SITES[index] ?? SITES[0]!;
@@ -1025,6 +1030,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     const bp = ravenBlit!;
     gl.useProgram(bp);
     gl.uniform4f(at(bp, "uRect"), ...rect);
+    gl.uniform1f(at(bp, "uAlpha"), bird.alpha);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const q = attrib(bp, "aPos", square, 2);

@@ -24,6 +24,9 @@ export type RavenView = {
   eye: number;
   /** Skyline elevation by azimuth (degrees), radians. */
   ridge: (az: number) => number;
+  /** The highest a flight's middle goes on screen (-1 bottom, 1 top): clear
+   * of the page's cards. */
+  ceiling: number;
 };
 
 export type RavenTiming = {
@@ -38,6 +41,9 @@ export type RavenTiming = {
 export const RAVEN_TIMING: RavenTiming = { first: [0.5, 1.5], gap: [27, 33] };
 
 const G = 9.81;
+/** Metres over which the bird fades in at a flight's start and out at its
+ * end: unseen when the ends are out of frame, as most are. */
+const FADE = 12;
 const RAD = Math.PI / 180;
 
 const add = (a: V, b: V): V => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -397,11 +403,14 @@ function frame(view: RavenView) {
   // Where the horizon straight ahead crosses the screen (-1 bottom, 1 top).
   const level = unit([fwd[0], 0, fwd[2]]);
   const horizon = dot(level, up) / (dot(level, fwd) * view.tanY);
-  // A height on screen from lo to hi above the horizon, kept below the
+  // A height on screen from lo to hi above the horizon, kept clear of the
   // page's cards: the band where the aurora and a city's glow light the sky
   // from behind, so the black bird shows against them.
   const low = (lo: number, hi: number) =>
-    rand(horizon + lo, Math.max(horizon + lo, Math.min(horizon + hi, 0.3)));
+    rand(
+      horizon + lo,
+      Math.max(horizon + lo, Math.min(horizon + hi, view.ceiling)),
+    );
   return { right, up, fwd, inside, ray, low };
 }
 
@@ -417,7 +426,9 @@ function skyward(p: V, view: RavenView): boolean {
 
 /** From p along d until just out of frame, or 100 m on, whichever is
  * first: a path that runs nearly along the line of sight would otherwise
- * start or end hundreds of metres off, the bird a dot for many seconds. */
+ * start or end hundreds of metres off, the bird a dot for many seconds.
+ * The planners prefer paths that do leave the frame; the bird fades in and
+ * out at the ends of those that do not (see FADE). */
 function leave(p: V, d: V, inside: (p: V) => boolean): V {
   for (let s = 0; s < 100; s += 2) {
     const q = add(p, mul(d, s));
@@ -438,6 +449,8 @@ function pass(view: RavenView): Path | null {
   const yaw = Math.atan2(fwd[0], fwd[2]);
   const ahead: V = [Math.sin(yaw), 0, Math.cos(yaw)];
   const across: V = [Math.cos(yaw), 0, -Math.sin(yaw)];
+  // A path whose ends are still in frame, in case no other turns up.
+  let spare: Path | null = null;
   for (let tries = 0; tries < 16; tries++) {
     // 20 to 65 m away, more often near the nearer end.
     const d = 20 + 45 * Math.random() ** 1.5;
@@ -465,9 +478,11 @@ function pass(view: RavenView): Path | null {
       bend(lerp(mid, b, 0.5)),
       keepUp(b, view),
     ];
-    return curve(through, rand(10, 12.5), false, 0.25);
+    const path = curve(through, rand(10, 12.5), false, 0.25);
+    if (!inside(a) && !inside(b)) return path;
+    spare ??= path;
   }
-  return null;
+  return spare;
 }
 
 /** A few slow circles on still air, then away. */
@@ -489,11 +504,37 @@ function circles(view: RavenView): Path | null {
       );
     }
     if (!ring.every((p) => skyward(p, view) && inside(p, 0.95))) continue;
+    // Join and leave the circle where the tangent leaves the frame soonest,
+    // within its first and last turn, keeping at least three quarters of a
+    // turn between: a tangent pointing away from the camera can stay in
+    // frame for far longer than the 100 m leave() goes.
     const tangent = (k: number) => unit(sub(ring[k + 1]!, ring[k]!));
-    const a = leave(ring[0]!, mul(tangent(0), -1), inside);
-    const b = leave(ring[steps]!, tangent(steps - 1), inside);
+    const out = (k: number, d: V) => {
+      const p = leave(ring[k]!, d, inside);
+      return {
+        k,
+        p,
+        s: Math.hypot(...sub(p, ring[k]!)) + (inside(p) ? 1e3 : 0),
+      };
+    };
+    const soonest = (list: ReturnType<typeof out>[]) =>
+      list.reduce((best, o) => (o.s < best.s ? o : best));
+    const first = soonest(
+      Array.from({ length: Math.min(12, steps - 9) }, (_, k) =>
+        out(k, mul(tangent(k), -1)),
+      ),
+    );
+    const last = soonest(
+      Array.from({ length: Math.min(12, steps - first.k - 8) }, (_, i) =>
+        out(steps - i, tangent(steps - i - 1)),
+      ),
+    );
     return curve(
-      [keepUp(a, view), ...ring, keepUp(b, view)],
+      [
+        keepUp(first.p, view),
+        ...ring.slice(first.k, last.k + 1),
+        keepUp(last.p, view),
+      ],
       rand(8.5, 10),
       true,
       0.12,
@@ -515,6 +556,8 @@ export type Raven = {
   mesh: Float32Array;
   /** Vertices to draw, 0 when there is no bird. */
   count: number;
+  /** How much of the bird shows, fading in and out at a flight's ends. */
+  alpha: number;
 };
 
 export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
@@ -539,6 +582,7 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
   const bird: Raven = {
     mesh,
     count: 0,
+    alpha: 0,
     reset(next) {
       path = null;
       bird.count = 0;
@@ -563,6 +607,7 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
       }
       s += path.speed * dt;
       if (s >= path.length) return bird.reset();
+      bird.alpha = smooth(s / FADE) * smooth((path.length - s) / FADE);
 
       // Heading and bank. The lift must carry the bird's weight and turn it,
       // so it leans along gravity plus the turn's acceleration (a coordinated

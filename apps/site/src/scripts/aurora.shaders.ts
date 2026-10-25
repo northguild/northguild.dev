@@ -514,7 +514,8 @@ void main() {
 
 // The raven's texture laid over the frame at the crop (uRect: centre and half
 // size in screen coordinates), mipmapped so thin wings and fingers stay
-// smooth. Premultiplied: the texture's alpha is the bird's coverage.
+// smooth. Premultiplied: the texture's alpha is the bird's coverage, and
+// uAlpha fades the whole bird in and out at the ends of a flight.
 export const RAVEN_BLIT_VS = `
 attribute vec2 aPos;
 uniform vec4 uRect;
@@ -528,6 +529,7 @@ void main() {
 export const RAVEN_BLIT_FS = `
 precision mediump float;
 uniform sampler2D uRaven;
+uniform float uAlpha;
 varying vec2 vUv;
-void main() { gl_FragColor = texture2D(uRaven, vUv); }
+void main() { gl_FragColor = texture2D(uRaven, vUv) * uAlpha; }
 `;
