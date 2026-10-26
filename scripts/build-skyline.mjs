@@ -20,8 +20,12 @@ import { SITES } from "../apps/site/src/scripts/aurora.sites.ts";
 // Degrees either side of the camera heading, and the azimuth step. City
 // sites are sampled finer so a dome a few tenths of a degree wide keeps its
 // shape; their wider views need less span.
-const spanFor = (site) => (site.buildings ? 75 : 100);
-const stepFor = (site) => (site.buildings ? 0.05 : 0.2);
+function viewSpanDegrees(site) {
+  return site.buildings ? 75 : 100;
+}
+function azimuthStepDegrees(site) {
+  return site.buildings ? 0.05 : 0.2;
+}
 const FAR = 80_000;
 const BUILDINGS_FAR = 12_000; // OSM buildings beyond this are below a pixel
 const LAND = 1.5; // metres above sea level that count as land, not water
@@ -35,9 +39,13 @@ const cache = join(tmpdir(), "northguild-dem");
 mkdirSync(cache, { recursive: true });
 mkdirSync(OUT, { recursive: true });
 
-const tileName = (lat, lon) =>
-  `${lat < 0 ? "S" : "N"}${String(Math.abs(lat)).padStart(2, "0")}_00_` +
-  `${lon < 0 ? "W" : "E"}${String(Math.abs(lon)).padStart(3, "0")}_00`;
+/** The Copernicus DEM tile name for a whole-degree corner. */
+function copernicusTileName(lat, lon) {
+  return (
+    `${lat < 0 ? "S" : "N"}${String(Math.abs(lat)).padStart(2, "0")}_00_` +
+    `${lon < 0 ? "W" : "E"}${String(Math.abs(lon)).padStart(3, "0")}_00`
+  );
+}
 
 async function load(tile) {
   const name = `Copernicus_DSM_COG_10_${tile}_DEM`;
@@ -90,7 +98,9 @@ async function overpass(query) {
   throw new Error("overpass: no server answered");
 }
 
-const num = (v) => Number.parseFloat(v);
+function parseNumber(v) {
+  return Number.parseFloat(v);
+}
 
 /**
  * OSM buildings and building parts (Simple 3D Buildings) with height, roof
@@ -112,17 +122,17 @@ async function osmBuildings([south, west, north, east]) {
     .filter((e) => e.geometry?.length > 2)
     .map((e) => {
       const t = e.tags ?? {};
-      const levels = num(t["building:levels"]);
-      const roofLevels = num(t["roof:levels"]);
+      const levels = parseNumber(t["building:levels"]);
+      const roofLevels = parseNumber(t["roof:levels"]);
       const roofFromLevels = Number.isFinite(roofLevels) ? roofLevels * 3.2 : 0;
       // In Simple 3D Buildings `height` is to the top of the roof.
-      let height = num(t.height);
+      let height = parseNumber(t.height);
       if (!Number.isFinite(height)) {
         height = Number.isFinite(levels)
           ? levels * 3.2 + 1 + roofFromLevels
           : 10;
       }
-      let roof = num(t["roof:height"]);
+      let roof = parseNumber(t["roof:height"]);
       if (!Number.isFinite(roof)) roof = roofFromLevels;
       return {
         part: "building:part" in t,
@@ -168,8 +178,8 @@ function inside([x, y], pts) {
 }
 
 async function build(site) {
-  const SPAN = spanFor(site);
-  const AZ_STEP = stepFor(site);
+  const SPAN = viewSpanDegrees(site);
+  const AZ_STEP = azimuthStepDegrees(site);
   const latRad = site.lat / DEG;
   const dLat = (FAR / R_EARTH) * DEG;
   const dLon = dLat / Math.cos(latRad);
@@ -184,12 +194,13 @@ async function build(site) {
       lo <= Math.floor(site.lon + dLon);
       lo++
     ) {
-      names.push(tileName(la, lo));
+      names.push(copernicusTileName(la, lo));
     }
   }
   const tiles = (await Promise.all(names.map(load))).filter(Boolean);
 
-  const height = (lat, lon) => {
+  // Ground height (m) at a point, interpolated from the DEM tiles.
+  function terrainHeight(lat, lon) {
     for (const t of tiles) {
       if (lon < t.west || lon >= t.east || lat <= t.south || lat > t.north) {
         continue;
@@ -200,25 +211,35 @@ async function build(site) {
       const y0 = Math.max(0, Math.min(t.height - 2, Math.floor(y)));
       const fx = Math.min(1, Math.max(0, x - x0));
       const fy = Math.min(1, Math.max(0, y - y0));
-      const at = (i, j) => t.data[(y0 + j) * t.width + x0 + i];
-      const top = at(0, 0) * (1 - fx) + at(1, 0) * fx;
-      const bottom = at(0, 1) * (1 - fx) + at(1, 1) * fx;
+      function tileSample(i, j) {
+        return t.data[(y0 + j) * t.width + x0 + i];
+      }
+      const top = tileSample(0, 0) * (1 - fx) + tileSample(1, 0) * fx;
+      const bottom = tileSample(0, 1) * (1 - fx) + tileSample(1, 1) * fx;
       return Math.max(0, top * (1 - fy) + bottom * fy);
     }
     return 0;
-  };
+  }
 
   // Local metres east (x) and north (y) of the viewer.
-  const toLocal = (lat, lon) => [
-    ((lon - site.lon) / DEG) * R_EARTH * Math.cos(latRad),
-    ((lat - site.lat) / DEG) * R_EARTH,
-  ];
+  function toLocalMetres(lat, lon) {
+    return [
+      ((lon - site.lon) / DEG) * R_EARTH * Math.cos(latRad),
+      ((lat - site.lat) / DEG) * R_EARTH,
+    ];
+  }
 
   const from = site.heading - SPAN;
   const count = Math.round((2 * SPAN) / AZ_STEP) + 1;
   // On a pier the eye height is above the sea; the model there may show a building.
-  const h0 = site.water ? site.eye : height(site.lat, site.lon) + site.eye;
-  const angleTo = (top, r) => Math.atan2(top - h0 - (r * r) / (2 * R_EFF), r);
+  const h0 = site.water
+    ? site.eye
+    : terrainHeight(site.lat, site.lon) + site.eye;
+  // Elevation angle of a height `top` at range r, after Earth's curvature and
+  // refraction.
+  function elevationAngle(top, r) {
+    return Math.atan2(top - h0 - (r * r) / (2 * R_EFF), r);
+  }
   // Over water the viewer's own pier may be in the model; start just past it.
   const near = site.water ? 15 : 300;
 
@@ -234,9 +255,9 @@ async function build(site) {
       const lat = site.lat + (r * Math.cos(az) * DEG) / R_EARTH;
       const lon =
         site.lon + (r * Math.sin(az) * DEG) / (R_EARTH * Math.cos(latRad));
-      const z = height(lat, lon);
+      const z = terrainHeight(lat, lon);
       if (!landAt && z > LAND) landAt = r;
-      const angle = angleTo(z, r);
+      const angle = elevationAngle(z, r);
       if (angle > best[i]) {
         best[i] = angle;
         bestR[i] = r;
@@ -244,7 +265,7 @@ async function build(site) {
     }
     // Over water the strip stops at the first land, however near: the
     // island's own shore curves down toward the frame.
-    if (site.water && landAt) shore[i] = angleTo(0, landAt);
+    if (site.water && landAt) shore[i] = elevationAngle(0, landAt);
   }
 
   if (site.buildings) {
@@ -256,7 +277,7 @@ async function build(site) {
     ].map((v) => Math.round(v * 1000) / 1000);
     const all = (await osmBuildings(box)).map((b) => ({
       ...b,
-      local: b.points.map((p) => toLocal(p.lat, p.lon)),
+      local: b.points.map((p) => toLocalMetres(p.lat, p.lon)),
     }));
     const parts = all.filter((b) => b.part);
     // Where a building is modelled in parts, draw the parts, not its outline.
@@ -265,13 +286,15 @@ async function build(site) {
       local.reduce((sum, [, y]) => sum + y, 0) / local.length,
     ]);
     const GRID = 200;
-    const cell = ([x, y]) => `${Math.floor(x / GRID)},${Math.floor(y / GRID)}`;
+    function gridCellKey([x, y]) {
+      return `${Math.floor(x / GRID)},${Math.floor(y / GRID)}`;
+    }
     const byCell = new Map();
     centres.forEach((c) => {
-      const key = cell(c);
+      const key = gridCellKey(c);
       byCell.set(key, [...(byCell.get(key) ?? []), c]);
     });
-    const hasParts = (local) => {
+    function hasModelledParts(local) {
       const xs = local.map(([x]) => x);
       const ys = local.map(([, y]) => y);
       for (
@@ -289,17 +312,19 @@ async function build(site) {
         }
       }
       return false;
-    };
+    }
     const shapes = [
       ...parts,
-      ...all.filter((b) => !b.part && !hasParts(b.local)),
+      ...all.filter((b) => !b.part && !hasModelledParts(b.local)),
     ];
     let used = 0;
     for (const { height: tall, roof, shape, points, local } of shapes) {
       const r = Math.min(...local.map(([x, y]) => Math.hypot(x, y)));
       if (r < 50 || r > BUILDINGS_FAR) continue;
       // Ground under the building: the lowest surface-model value at its corners.
-      const ground = Math.min(...points.map((p) => height(p.lat, p.lon)));
+      const ground = Math.min(
+        ...points.map((p) => terrainHeight(p.lat, p.lon)),
+      );
       const azs = local.map(([x, y]) => Math.atan2(x, y) * DEG);
       const lo = Math.min(...azs);
       const hi = Math.max(...azs);
@@ -322,7 +347,7 @@ async function build(site) {
         i++
       ) {
         const u = (from + i * AZ_STEP - mid) / half;
-        const angle = angleTo(
+        const angle = elevationAngle(
           ground + tall - roof + roof * roofProfile(shape, u),
           r,
         );
@@ -344,7 +369,9 @@ async function build(site) {
   );
   const base = Int16Array.from(shore, (a) => Math.round(a * DEG * 100));
 
-  const b64 = (a) => Buffer.from(a.buffer).toString("base64");
+  function toBase64(a) {
+    return Buffer.from(a.buffer).toString("base64");
+  }
   writeFileSync(
     new URL(`${site.id}.ts`, OUT),
     `// Generated by scripts/build-skyline.mjs. Do not edit.
@@ -355,9 +382,9 @@ async function build(site) {
 export const SKYLINE = {
   from: ${from},
   step: ${AZ_STEP},
-  elev: "${b64(elev)}",
-  dist: "${b64(dist)}",
-  base: "${b64(base)}",
+  elev: "${toBase64(elev)}",
+  dist: "${toBase64(dist)}",
+  base: "${toBase64(base)}",
 };
 `,
   );

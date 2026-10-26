@@ -21,18 +21,21 @@ const OUT = new URL("../apps/site/public/constellations.json", import.meta.url);
 const MATCH = 0.2;
 const RAD = Math.PI / 180;
 
-const unit = (ra, dec) => [
-  Math.cos(dec * RAD) * Math.cos(ra * RAD),
-  Math.cos(dec * RAD) * Math.sin(ra * RAD),
-  Math.sin(dec * RAD),
-];
+/** Unit vector for a right ascension and declination in degrees. */
+function unitVector(ra, dec) {
+  return [
+    Math.cos(dec * RAD) * Math.cos(ra * RAD),
+    Math.cos(dec * RAD) * Math.sin(ra * RAD),
+    Math.sin(dec * RAD),
+  ];
+}
 
 // Record layout as scripts/build-stars.mjs writes it.
 const buf = readFileSync(STARS);
 const stars = [];
 for (let o = 0; o + 6 <= buf.length; o += 6) {
   stars.push(
-    unit(
+    unitVector(
       (buf.readUInt16LE(o) / 65536) * 360,
       (buf.readInt16LE(o + 2) / 32767) * 90,
     ),
@@ -43,8 +46,9 @@ const res = await fetch(SOURCE);
 if (!res.ok) throw new Error(`constellations: HTTP ${res.status}`);
 const { features } = await res.json();
 
-const nearest = (ra, dec) => {
-  const [x, y, z] = unit(ra, dec);
+/** Index of the closest catalogue star within MATCH degrees, or -1. */
+function nearestStar(ra, dec) {
+  const [x, y, z] = unitVector(ra, dec);
   let best = -1;
   let dot = Math.cos(MATCH * RAD);
   stars.forEach(([sx, sy, sz], i) => {
@@ -55,7 +59,7 @@ const nearest = (ra, dec) => {
     }
   });
   return best;
-};
+}
 
 // Serpens comes as two features, head and tail; they share one figure.
 const figures = new Map();
@@ -67,7 +71,7 @@ for (const { id, geometry } of features) {
     seen.add(`${pairs[k]}-${pairs[k + 1]}`);
   }
   for (const line of geometry.coordinates) {
-    const ids = line.map(([ra, dec]) => nearest(ra, dec));
+    const ids = line.map(([ra, dec]) => nearestStar(ra, dec));
     for (let k = 1; k < ids.length; k++) {
       const [a, b] = [ids[k - 1], ids[k]];
       if (a < 0 || b < 0) {
