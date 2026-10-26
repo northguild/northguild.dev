@@ -26,7 +26,7 @@ import {
   RIDGE_VS,
   SPARK_VS,
   STAR_VS,
-  skyFs,
+  skyFragmentShader,
 } from "./aurora.shaders";
 import { getSystemTimeZone, getUnixNow } from "@northguild/gmt";
 import { SUN_UP, lookAhead, type Seer, type SiteTimes } from "./aurora.ahead";
@@ -37,7 +37,7 @@ import {
   PLANETS,
   apply,
   lift,
-  columns,
+  matrixColumns,
   sky,
   type Sky,
   type Vec3,
@@ -58,7 +58,9 @@ const RAVEN_TEX = 256;
 // moon and sun need the real time. Frame timing uses rAF stamps, not the wall
 // clock.
 let wallMs = 0;
-const wall = () => (wallMs = getUnixNow() ?? wallMs);
+function readWallClock(): number {
+  return (wallMs = getUnixNow() ?? wallMs);
+}
 
 type Rgb = [number, number, number];
 type Skyline = typeof ISAFJORDUR;
@@ -139,11 +141,13 @@ function siteForTimeZone(): number {
   return match >= 0 ? match : Math.floor(Math.random() * SITES.length);
 }
 
+/** A frame on a timer, where the worker has no requestAnimationFrame. */
+function nextFrameByTimer(cb: FrameRequestCallback): number {
+  return setTimeout(() => cb(performance.now()), FRAME_MS);
+}
+
 const nextFrame =
-  "requestAnimationFrame" in self
-    ? requestAnimationFrame
-    : (cb: FrameRequestCallback) =>
-        setTimeout(() => cb(performance.now()), FRAME_MS);
+  "requestAnimationFrame" in self ? requestAnimationFrame : nextFrameByTimer;
 const cancelFrame =
   "cancelAnimationFrame" in self ? cancelAnimationFrame : clearTimeout;
 
@@ -187,15 +191,16 @@ function compile(
   return null;
 }
 
-const bytes = (b64: string) =>
-  Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+function decodeBase64(b64: string): Uint8Array {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
 
 /** Ridge strip: for each azimuth, the ridge direction, then the far shore
  * over water or a direction far below the frame. */
 function ridgeMesh(skyline: Skyline): Float32Array {
-  const elev = new Int16Array(bytes(skyline.elev).buffer);
-  const dist = new Uint16Array(bytes(skyline.dist).buffer);
-  const base = new Int16Array(bytes(skyline.base).buffer);
+  const elev = new Int16Array(decodeBase64(skyline.elev).buffer);
+  const dist = new Uint16Array(decodeBase64(skyline.dist).buffer);
+  const base = new Int16Array(decodeBase64(skyline.base).buffer);
   const out = new Float32Array(elev.length * 8);
   elev.forEach((e, i) => {
     const az = (skyline.from + i * skyline.step) * RAD;
@@ -301,7 +306,7 @@ function project(
 function ridgeFor(site: Site): (az: number) => number {
   const skyline = SKYLINES[site.id];
   if (!skyline) return () => -Math.PI / 2;
-  const elev = new Int16Array(bytes(skyline.elev).buffer);
+  const elev = new Int16Array(decodeBase64(skyline.elev).buffer);
   return (az) => {
     const x = (az - skyline.from) / skyline.step;
     const i = Math.floor(x);
@@ -352,34 +357,34 @@ function seer(site: Site, width: number, height: number): Seer {
   const fwd = [view.cam[6]!, view.cam[7]!, view.cam[8]!];
   // From the middle of the frame to its corner: nothing farther is in frame.
   const reach = Math.atan(Math.hypot(view.tanY * (w / h), view.tanY));
-  const shows = (p: Vec3) => {
+  function isShown(p: Vec3): boolean {
     if (Math.asin(p[1]) < ridge(Math.atan2(p[0], p[2]) / RAD)) return false;
     const xy = project(view, w, h, p);
     return !!xy && xy[0] >= 0 && xy[0] <= w && xy[1] >= 0 && xy[1] <= h;
-  };
+  }
   // How far beyond `edge` of the frame's middle d is, and below `above`.
-  const far = (d: Vec3, edge: number, above: number) => {
+  function gapOutsideView(d: Vec3, edge: number, above: number): number {
     const cos = d[0] * fwd[0]! + d[1] * fwd[1]! + d[2] * fwd[2]!;
     const off = Math.acos(Math.min(1, Math.max(-1, cos)));
     return Math.max(off - reach - edge, above - Math.asin(d[1]));
-  };
+  }
   return {
     disc: (d, r, above) => {
-      const gap = far(d, r, above);
+      const gap = gapOutsideView(d, r, above);
       if (gap > 0) return gap;
       // The centre and 16 points round the rim: a sliver counts.
-      return ring(d, r, 16, true).some(shows) ? 0 : 1e-6;
+      return ring(d, r, 16, true).some(isShown) ? 0 : 1e-6;
     },
     halo: (sun, r) => {
-      const gap = far(sun, HALO, SUN_UP);
+      const gap = gapOutsideView(sun, HALO, SUN_UP);
       if (gap > 0) return gap;
       // The ring is drawn too faintly to see on its own (and not at all over
       // the aurora), so it counts only beside the sun's own disc, and only
       // when a quarter of it shows (18 of 72 points, 5° apart round it).
-      if (ring(sun, r, 16, true).some(shows)) {
+      if (ring(sun, r, 16, true).some(isShown)) {
         let ringShows = 0;
         for (const p of ring(sun, HALO, 72, false)) {
-          if (shows(p) && ++ringShows >= 18) return 0;
+          if (isShown(p) && ++ringShows >= 18) return 0;
         }
       }
       // The pillar, only where it is drawn at half strength or more, like
@@ -394,7 +399,7 @@ function seer(site: Site, width: number, height: number): Seer {
         const up = alt + k * 0.5 * RAD;
         const c = Math.cos(up);
         const p: Vec3 = [Math.sin(az) * c, Math.sin(up), Math.cos(az) * c];
-        if (shows(p) && ++pillarShows >= 2) return 0;
+        if (isShown(p) && ++pillarShows >= 2) return 0;
       }
       return 1e-6;
     },
@@ -403,20 +408,32 @@ function seer(site: Site, width: number, height: number): Seer {
 
 function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   const { canvas } = init;
-  const gl = canvas.getContext("webgl", {
+  const context = canvas.getContext("webgl", {
     alpha: false,
     antialias: false,
     depth: false,
     stencil: false,
     powerPreference: "low-power",
   });
-  if (!gl || gl.getParameter(gl.MAX_TEXTURE_SIZE) < MAP_W) return;
-  const foot = compile(gl, QUAD_VS, FOOT_FS);
-  let skyProgram = compile(gl, QUAD_VS, skyFs(20, 320));
-  const sparks = compile(gl, SPARK_VS, POINT_FS);
-  const stars = compile(gl, STAR_VS, POINT_FS);
-  const ridge = compile(gl, RIDGE_VS, RIDGE_FS);
-  if (!foot || !skyProgram || !sparks || !stars || !ridge) return;
+  if (!context || context.getParameter(context.MAX_TEXTURE_SIZE) < MAP_W) {
+    return;
+  }
+  // Bound again so the named functions below see it as non-null: TypeScript
+  // does not carry a null check into a function declaration.
+  const gl: WebGLRenderingContext = context;
+  const maybeFoot = compile(gl, QUAD_VS, FOOT_FS);
+  let skyProgram = compile(gl, QUAD_VS, skyFragmentShader(20, 320));
+  const maybeSparks = compile(gl, SPARK_VS, POINT_FS);
+  const maybeStars = compile(gl, STAR_VS, POINT_FS);
+  const maybeRidge = compile(gl, RIDGE_VS, RIDGE_FS);
+  if (!maybeFoot || !skyProgram || !maybeSparks || !maybeStars || !maybeRidge) {
+    return;
+  }
+  // Bound again as non-null, for the same reason as gl.
+  const foot: WebGLProgram = maybeFoot;
+  const sparks: WebGLProgram = maybeSparks;
+  const stars: WebGLProgram = maybeStars;
+  const ridge: WebGLProgram = maybeRidge;
   // Without these the sky still runs, just with no raven.
   const ravenProgram = compile(gl, RAVEN_VS, RAVEN_FS);
   const ravenBlit = compile(gl, RAVEN_BLIT_VS, RAVEN_BLIT_FS);
@@ -445,13 +462,13 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.UNSIGNED_BYTE,
     null,
   );
-  const params = (filter: number, wrapS: number) => {
+  function setTextureParams(filter: number, wrapS: number): void {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  };
-  params(gl.NEAREST, gl.CLAMP_TO_EDGE);
+  }
+  setTextureParams(gl.NEAREST, gl.CLAMP_TO_EDGE);
   const fbo = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
   gl.framebufferTexture2D(
@@ -479,9 +496,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     0,
     gl.LUMINANCE,
     gl.UNSIGNED_BYTE,
-    bytes(MOON.data),
+    decodeBase64(MOON.data),
   );
-  params(gl.LINEAR, gl.REPEAT);
+  setTextureParams(gl.LINEAR, gl.REPEAT);
 
   // The raven's texture on unit 2, mipmapped, with a depth buffer to draw it.
   gl.activeTexture(gl.TEXTURE2);
@@ -498,7 +515,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.UNSIGNED_BYTE,
     null,
   );
-  params(gl.LINEAR, gl.CLAMP_TO_EDGE);
+  setTextureParams(gl.LINEAR, gl.CLAMP_TO_EDGE);
   gl.texParameteri(
     gl.TEXTURE_2D,
     gl.TEXTURE_MIN_FILTER,
@@ -534,16 +551,20 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0);
 
-  const buffer = (data: Float32Array) => {
+  function createStaticBuffer(data: Float32Array) {
     const b = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     return b;
-  };
-  const tri = buffer(new Float32Array([-1, -1, 3, -1, -1, 3]));
-  const square = buffer(new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
+  }
+  const tri = createStaticBuffer(new Float32Array([-1, -1, 3, -1, -1, 3]));
+  const square = createStaticBuffer(
+    new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
+  );
   const ravenBuf = gl.createBuffer();
-  const seeds = buffer(Float32Array.from({ length: SPARKS * 4 }, Math.random));
+  const seeds = createStaticBuffer(
+    Float32Array.from({ length: SPARKS * 4 }, Math.random),
+  );
   const ridgeBuf = gl.createBuffer();
   let ridgeCount = 0;
   const planetBuf = gl.createBuffer();
@@ -552,7 +573,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let starsAt = 0;
 
   // Uniforms that never change: colours and samplers.
-  const setup = (program: WebGLProgram) => {
+  function setFixedUniforms(program: WebGLProgram): void {
     gl.useProgram(program);
     for (const [name, rgb] of Object.entries(colours)) {
       const loc = gl.getUniformLocation(program, name);
@@ -561,66 +582,77 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.uniform1i(gl.getUniformLocation(program, "uMap"), 0);
     gl.uniform1i(gl.getUniformLocation(program, "uMoonTex"), 1);
     gl.uniform1i(gl.getUniformLocation(program, "uRaven"), 2);
-  };
-  for (const p of [foot, skyProgram, sparks, stars, ridge]) setup(p);
+  }
+  for (const p of [foot, skyProgram, sparks, stars, ridge]) setFixedUniforms(p);
   if (ravenProgram && ravenBlit)
-    for (const p of [ravenProgram, ravenBlit]) setup(p);
-  const at = (program: WebGLProgram, name: string) =>
-    gl.getUniformLocation(program, name);
+    for (const p of [ravenProgram, ravenBlit]) setFixedUniforms(p);
+  function uniformLocation(
+    program: WebGLProgram,
+    name: string,
+  ): WebGLUniformLocation | null {
+    return gl.getUniformLocation(program, name);
+  }
 
-  const attrib = (
+  function bindAttribute(
     program: WebGLProgram,
     name: string,
     buf: WebGLBuffer | null,
     size: number,
     stride = 0,
     offset = 0,
-  ) => {
+  ): number {
     const a = gl.getAttribLocation(program, name);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.enableVertexAttribArray(a);
     gl.vertexAttribPointer(a, size, gl.FLOAT, false, stride, offset);
     return a;
-  };
+  }
 
   // Everything that depends on where the viewer stands.
   let site = SITES[0]!;
   let tilt = [0, 0];
   // Ridge elevation by azimuth (degrees), radians; what is below it is hidden.
-  let ridgeAt = (_az: number) => -Math.PI / 2;
+  function flatRidge(_az: number): number {
+    return -Math.PI / 2;
+  }
+  let ridgeAt: (az: number) => number = flatRidge;
   let cam: Float32Array = new Float32Array(9);
   let tanY = 1;
   let portrait = 0;
-  const aim = () => ({ cam, tanY, portrait } = camera(site, width, height));
+  function aimCamera(): void {
+    ({ cam, tanY, portrait } = camera(site, width, height));
+  }
   // The raven, planned in the view as it is when a flight starts.
   const bird = raven(RAVEN_TIMING);
-  const ravenView = () => ({
-    cam,
-    tanY,
-    aspect: (width || 1) / (height || 1),
-    eye: site.eye,
-    ridge: ridgeAt,
-    // Landscape: below the middle of the cards. Portrait: the cards sit
-    // below the horizon, so up toward the top of the frame.
-    ceiling: 0.3 + 0.55 * portrait,
-  });
-  const place = (index: number) => {
+  function currentRavenView() {
+    return {
+      cam,
+      tanY,
+      aspect: (width || 1) / (height || 1),
+      eye: site.eye,
+      ridge: ridgeAt,
+      // Landscape: below the middle of the cards. Portrait: the cards sit
+      // below the horizon, so up toward the top of the frame.
+      ceiling: 0.3 + 0.55 * portrait,
+    };
+  }
+  function moveToSite(index: number): void {
     site = SITES[index] ?? SITES[0]!;
     // Field lines climb toward magnetic south at the site's dip.
     const south = (180 + site.decl) * RAD;
     const lean = 1 / Math.tan(site.dip * RAD);
     tilt = [lean * Math.sin(south), lean * Math.cos(south)];
-    aim();
+    aimCamera();
     const skyline = SKYLINES[site.id];
     const mesh = skyline ? ridgeMesh(skyline) : new Float32Array(0);
     ridgeAt = ridgeFor(site);
     gl.bindBuffer(gl.ARRAY_BUFFER, ridgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
     ridgeCount = mesh.length / 4;
-  };
+  }
   let width = init.width;
   let height = init.height;
-  place(init.site < 0 ? siteForTimeZone() : init.site);
+  moveToSite(init.site < 0 ? siteForTimeZone() : init.site);
   scope.postMessage({ site: SITES.indexOf(site) });
 
   // Quality levels: 0 full, 1 lower resolution and fewer sky steps, 2 also
@@ -635,19 +667,19 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let samples = 0;
   let total = 0;
   let tuning = true;
-  let skyAt = wall();
+  let skyAt = readWallClock();
   let now: Sky = sky(site, skyAt);
   let planetsAt = 0;
 
-  const resize = () => {
+  function resizeCanvas(): void {
     const w = width || 1;
     const h = height || 1;
     const scale =
       Math.min(BASE_SCALE, MAX_EDGE / Math.max(w, h)) * (level ? 0.7 : 1);
     canvas.width = Math.round(w * scale);
     canvas.height = Math.round(h * scale);
-    aim();
-  };
+    aimCamera();
+  }
 
   // What the page's pointer is over: the nearest sun, moon, planet or
   // star within reach that is up, clear of the skyline, bright enough to be
@@ -659,28 +691,32 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let figures: Record<string, number[]> = {};
   const figureOf = new Map<number, string>();
   // A direction to CSS pixels, or null behind the camera.
-  const screen = (d: Vec3) => project({ cam, tanY }, width, height, d);
+  function toScreen(d: Vec3): [number, number] | null {
+    return project({ cam, tanY }, width, height, d);
+  }
   // Up and clear of the skyline.
-  const clear = (d: Vec3, above: number) => {
+  function isClearOfSkyline(d: Vec3, above: number): boolean {
     const alt = Math.asin(d[1]);
     return alt >= above && alt >= ridgeAt(Math.atan2(d[0], d[2]) / RAD);
-  };
+  }
   // True direction, and where it is seen (lifted by refraction, as drawn).
-  const starTrue = (i: number): Vec3 => {
+  function trueStarDirection(i: number): Vec3 {
     const s = starDirs!;
     return apply(now.stars, [s[i * 5]!, s[i * 5 + 1]!, s[i * 5 + 2]!]);
-  };
-  const starAt = (i: number): Vec3 => lift(starTrue(i));
+  }
+  function seenStarDirection(i: number): Vec3 {
+    return lift(trueStarDirection(i));
+  }
   // A figure's lines, counted out from the hovered star or the figure's star
   // nearest it (parts it does not reach follow on), stopping short of each
   // star and cut wherever they pass below the horizon or behind the mountains.
-  const figureLines = (pairs: number[], star: number): SkyLine[] => {
+  function figureLines(pairs: number[], star: number): SkyLine[] {
     let from = star;
     if (!pairs.includes(star)) {
-      const s = starAt(star);
+      const s = seenStarDirection(star);
       let near = -2;
       for (const i of pairs) {
-        const d = starAt(i);
+        const d = seenStarDirection(i);
         const dot = d[0] * s[0] + d[1] * s[1] + d[2] * s[2];
         if (dot > near) [near, from] = [dot, i];
       }
@@ -713,17 +749,17 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       let [a, b] = [pairs[k]!, pairs[k + 1]!];
       if (step.get(b)! < step.get(a)!) [a, b] = [b, a];
       // Along the true great circle, each point then lifted as drawn.
-      const [da, db] = [starTrue(a), starTrue(b)];
+      const [da, db] = [trueStarDirection(a), trueStarDirection(b)];
       const cos = da[0] * db[0] + da[1] * db[1] + da[2] * db[2];
       const angle = Math.acos(Math.min(1, Math.max(-1, cos)));
       if (angle <= 2 * gap) continue;
       // Along the great circle in steps of at most half a degree.
       const n = Math.max(2, Math.ceil((angle - 2 * gap) / (0.5 * RAD)));
       let run: number[] = [];
-      const end = () => {
+      function finishRun(): void {
         if (run.length >= 4) out.push({ step: step.get(a)!, points: run });
         run = [];
-      };
+      }
       for (let i = 0; i <= n; i++) {
         const f = gap + ((angle - 2 * gap) * i) / n;
         const [ka, kb] = [Math.sin(angle - f), Math.sin(f)];
@@ -733,27 +769,27 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
           (ka * da[1] + kb * db[1]) / s,
           (ka * da[2] + kb * db[2]) / s,
         ]);
-        const xy = clear(d, 0) ? screen(d) : null;
+        const xy = isClearOfSkyline(d, 0) ? toScreen(d) : null;
         if (!xy) {
-          end();
+          finishRun();
           continue;
         }
         run.push(Math.round(xy[0] * 10) / 10, Math.round(xy[1] * 10) / 10);
       }
-      end();
+      finishRun();
     }
     return out;
-  };
+  }
   // What was last picked, to follow: a star's index, or SUN, LUNA or
   // PLANET - k for planet k (LUNA: MOON is the texture). NOTHING when
   // nothing is.
   const [NOTHING, SUN, LUNA, PLANET] = [-1, -2, -3, -4];
   let held = NOTHING;
-  const planetAt = (k: number): Vec3 => {
+  function seenPlanetDirection(k: number): Vec3 {
     const p = now.planets;
     return lift(apply(now.stars, [p[k * 5]!, p[k * 5 + 1]!, p[k * 5 + 2]!]));
-  };
-  const pick = (px: number, py: number, reach: number): SkyLabel | null => {
+  }
+  function pickNear(px: number, py: number, reach: number): SkyLabel | null {
     const w = width || 1;
     const h = height || 1;
     const limit = site.limit - 2 * now.moonlight;
@@ -761,16 +797,16 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     let bestWhat = NOTHING;
     let bestFigure = "";
     let nearest = reach * reach;
-    const consider = (
+    function consider(
       name: string,
       note: string,
       d: Vec3,
       above: number,
       what: number,
       figure = "",
-    ) => {
-      if (!clear(d, above)) return;
-      const xy = screen(d);
+    ): void {
+      if (!isClearOfSkyline(d, above)) return;
+      const xy = toScreen(d);
       if (!xy) return;
       const [x, y] = xy;
       if (x < 0 || x > w || y < 0 || y > h) return;
@@ -780,24 +816,25 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       bestWhat = what;
       bestFigure = figure;
       best = { name, note, x: Math.round(x), y: Math.round(y) };
-    };
+    }
     // Fainter near the horizon, as the star shader draws it.
-    const seen = (mag: number, d: Vec3) =>
-      mag + 0.12 * (1 / (Math.max(d[1], 0) + 0.04) - 1) < limit;
+    function isBrightEnough(mag: number, d: Vec3): boolean {
+      return mag + 0.12 * (1 / (Math.max(d[1], 0) + 0.04) - 1) < limit;
+    }
     // Seen from its upper limb on the horizon (now.sun is lifted by refraction).
     consider("Sun", "", now.sun, -now.sunRadius, SUN);
     consider("Moon", "", now.moon, 0, LUNA);
     PLANETS.forEach((name, k) => {
-      const d = planetAt(k);
-      if (seen(now.planets[k * 5 + 3]!, d)) {
+      const d = seenPlanetDirection(k);
+      if (isBrightEnough(now.planets[k * 5 + 3]!, d)) {
         consider(name, "Planet", d, 0, PLANET - k);
       }
     });
     const s = starDirs;
     if (s) {
       for (const [i, name, constellation = "", quiet] of named) {
-        const d = starAt(i);
-        if (!seen(s[i * 5 + 3]!, d)) continue;
+        const d = seenStarDirection(i);
+        if (!isBrightEnough(s[i * 5 + 3]!, d)) continue;
         const note = quiet === 0 ? "" : constellation;
         const figure = constellation || figureOf.get(i) || "";
         consider(name, note, d, 0, i, figure);
@@ -812,22 +849,22 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       figure: bestFigure,
       lines: figureLines(pairs, bestWhat),
     };
-  };
+  }
   // Pick the held object again where it is drawn now.
-  const follow = () => {
+  function followHeld(): void {
     if (held === NOTHING) return;
     const d =
       held >= 0
-        ? starAt(held)
+        ? seenStarDirection(held)
         : held === SUN
           ? now.sun
           : held === LUNA
             ? now.moon
-            : planetAt(PLANET - held);
-    const xy = screen(d);
-    scope.postMessage({ pick: xy ? pick(xy[0], xy[1], 1) : null });
+            : seenPlanetDirection(PLANET - held);
+    const xy = toScreen(d);
+    scope.postMessage({ pick: xy ? pickNear(xy[0], xy[1], 1) : null });
     if (!xy) held = NOTHING;
-  };
+  }
 
   // Sun and moon times, while the page wants them: worked out fresh from the
   // clock a slice at a time between frames, and again when a spell starts or
@@ -836,18 +873,18 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let wantTimes = false;
   let timesRun = 0;
   let timesTimer = 0;
-  const times = () => {
+  function updateTimes(): void {
     clearTimeout(timesTimer);
     const run = ++timesRun;
     if (!wantTimes) return;
     const [w, h] = [width || 1, height || 1];
     const seers = SITES.map((s) => seer(s, w, h));
-    const job = lookAhead(SITES, seers, wall());
-    const slice = () => {
+    const job = lookAhead(SITES, seers, readWallClock());
+    function workOnTimes(): void {
       if (run !== timesRun) return;
       const step = job.next();
       if (!step.done) {
-        timesTimer = self.setTimeout(slice, 0);
+        timesTimer = self.setTimeout(workOnTimes, 0);
         return;
       }
       scope.postMessage({
@@ -855,26 +892,26 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
         zone: getSystemTimeZone(),
       });
       timesTimer = self.setTimeout(
-        times,
-        Math.max(step.value.next - wall(), 0) + 1000,
+        updateTimes,
+        Math.max(step.value.next - readWallClock(), 0) + 1000,
       );
-    };
-    slice();
-  };
+    }
+    workOnTimes();
+  }
 
-  const quad = (program: WebGLProgram) => {
-    const a = attrib(program, "aPos", tri, 2);
+  function drawQuad(program: WebGLProgram): void {
+    const a = bindAttribute(program, "aPos", tri, 2);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.disableVertexAttribArray(a);
-  };
+  }
 
-  const draw = () => {
+  function drawFrame(): void {
     // The real sky turns slowly; refresh it once a second.
-    if (wall() - skyAt > 1000) {
+    if (readWallClock() - skyAt > 1000) {
       skyAt = wallMs;
       now = sky(site, skyAt);
       planetsAt = 0;
-      follow();
+      followHeld();
     }
     if (!planetsAt) {
       planetsAt = skyAt;
@@ -883,94 +920,108 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     }
     const tan = [tanY * (canvas.width / canvas.height), tanY];
     const px = Math.max(1, canvas.height / 540);
-    const view = (program: WebGLProgram) => {
+    function setViewUniforms(program: WebGLProgram): void {
       gl.useProgram(program);
-      gl.uniformMatrix3fv(at(program, "uCam"), false, cam);
-      gl.uniform2fv(at(program, "uTan"), tan);
-      gl.uniform1f(at(program, "uT"), t);
-      gl.uniform1f(at(program, "uPx"), px);
-      gl.uniform1f(at(program, "uMoonlight"), now.moonlight);
-      gl.uniform2fv(at(program, "uTilt"), tilt);
-      gl.uniform1f(at(program, "uGlow"), site.glow);
-      gl.uniform1f(at(program, "uLights"), site.lights);
+      gl.uniformMatrix3fv(uniformLocation(program, "uCam"), false, cam);
+      gl.uniform2fv(uniformLocation(program, "uTan"), tan);
+      gl.uniform1f(uniformLocation(program, "uT"), t);
+      gl.uniform1f(uniformLocation(program, "uPx"), px);
+      gl.uniform1f(uniformLocation(program, "uMoonlight"), now.moonlight);
+      gl.uniform2fv(uniformLocation(program, "uTilt"), tilt);
+      gl.uniform1f(uniformLocation(program, "uGlow"), site.glow);
+      gl.uniform1f(uniformLocation(program, "uLights"), site.lights);
       for (const [name, c] of [
         ["uC0", site.curtains[0]],
         ["uC1", site.curtains[1]],
       ] as const) {
-        gl.uniform3f(at(program, name), c.base, c.centre, c.half);
+        gl.uniform3f(uniformLocation(program, name), c.base, c.centre, c.half);
       }
-    };
+    }
 
     // 1. Footprint.
     gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, MAP_W, MAP_H);
-    view(foot);
-    quad(foot);
+    setViewUniforms(foot);
+    drawQuad(foot);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
 
     // 2. Sky and moon.
     const sp = skyProgram;
     if (!sp) return;
-    view(sp);
-    gl.uniform1f(at(sp, "uPxAng"), (2 * tanY) / canvas.height);
-    gl.uniform4f(at(sp, "uMoon"), ...now.moon, now.moonRadius);
-    gl.uniform3fv(at(sp, "uMoonN"), now.moonNorth);
-    gl.uniform3fv(at(sp, "uSun"), now.sun);
-    gl.uniform2f(at(sp, "uSunDisc"), now.sunRadius, now.sunVisible);
-    gl.uniform3fv(at(sp, "uShadow"), now.shadow);
-    gl.uniform2f(at(sp, "uShadowR"), now.umbra, now.penumbra);
-    quad(sp);
+    setViewUniforms(sp);
+    gl.uniform1f(uniformLocation(sp, "uPxAng"), (2 * tanY) / canvas.height);
+    gl.uniform4f(uniformLocation(sp, "uMoon"), ...now.moon, now.moonRadius);
+    gl.uniform3fv(uniformLocation(sp, "uMoonN"), now.moonNorth);
+    gl.uniform3fv(uniformLocation(sp, "uSun"), now.sun);
+    gl.uniform2f(
+      uniformLocation(sp, "uSunDisc"),
+      now.sunRadius,
+      now.sunVisible,
+    );
+    gl.uniform3fv(uniformLocation(sp, "uShadow"), now.shadow);
+    gl.uniform2f(uniformLocation(sp, "uShadowR"), now.umbra, now.penumbra);
+    drawQuad(sp);
 
     // 3. Stars and sparks, added on top.
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    view(stars);
-    gl.uniformMatrix3fv(at(stars, "uStars"), false, columns(now.stars));
-    gl.uniform1f(at(stars, "uLimit"), site.limit - 2 * now.moonlight);
-    const points = (
+    setViewUniforms(stars);
+    gl.uniformMatrix3fv(
+      uniformLocation(stars, "uStars"),
+      false,
+      matrixColumns(now.stars),
+    );
+    gl.uniform1f(
+      uniformLocation(stars, "uLimit"),
+      site.limit - 2 * now.moonlight,
+    );
+    function drawPoints(
       buf: WebGLBuffer | null,
       count: number,
       fade: number,
       steady: number,
-    ) => {
-      gl.uniform1f(at(stars, "uFade"), fade);
-      gl.uniform1f(at(stars, "uSteady"), steady);
-      const a = attrib(stars, "aDir", buf, 3, 20, 0);
-      const b = attrib(stars, "aMag", buf, 2, 20, 12);
+    ): void {
+      gl.uniform1f(uniformLocation(stars, "uFade"), fade);
+      gl.uniform1f(uniformLocation(stars, "uSteady"), steady);
+      const a = bindAttribute(stars, "aDir", buf, 3, 20, 0);
+      const b = bindAttribute(stars, "aMag", buf, 2, 20, 12);
       gl.drawArrays(gl.POINTS, 0, count);
       gl.disableVertexAttribArray(a);
       gl.disableVertexAttribArray(b);
-    };
+    }
     if (starBuf && starCount) {
-      points(
+      drawPoints(
         starBuf,
         starCount,
         Math.min(1, (performance.now() - starsAt) / 1500),
         0,
       );
     }
-    points(planetBuf, now.planets.length / 5, 1, 1);
-    view(sparks);
-    const s = attrib(sparks, "aSeed", seeds, 4);
+    drawPoints(planetBuf, now.planets.length / 5, 1, 1);
+    setViewUniforms(sparks);
+    const s = bindAttribute(sparks, "aSeed", seeds, 4);
     gl.drawArrays(gl.POINTS, 0, sparkCount);
     gl.disableVertexAttribArray(s);
 
     // 4. Mountains over everything.
     gl.disable(gl.BLEND);
-    view(ridge);
-    const r = attrib(ridge, "aRidge", ridgeBuf, 4);
+    setViewUniforms(ridge);
+    const r = bindAttribute(ridge, "aRidge", ridgeBuf, 4);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, ridgeCount);
     gl.disableVertexAttribArray(r);
 
     // 5. The raven, in front of everything.
-    if (ravenOk && bird.count) drawRaven(view, tan);
-  };
+    if (ravenOk && bird.count) drawRaven(setViewUniforms, tan);
+  }
 
   // The raven into its texture with the camera cropped to it, then the
   // texture, scaled down, over the frame.
-  const drawRaven = (view: (program: WebGLProgram) => void, tan: number[]) => {
+  function drawRaven(
+    setViewUniforms: (program: WebGLProgram) => void,
+    tan: number[],
+  ): void {
     const [W, H] = [canvas.width, canvas.height];
     const m = bird.mesh;
     let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
@@ -1001,22 +1052,22 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
-    view(rp);
-    gl.uniform4f(at(rp, "uCrop"), ...rect);
+    setViewUniforms(rp);
+    gl.uniform4f(uniformLocation(rp, "uCrop"), ...rect);
     gl.uniform2f(
-      at(rp, "uDepth"),
+      uniformLocation(rp, "uDepth"),
       (far + near) / (far - near),
       (2 * far * near) / (near - far),
     );
-    gl.uniform4f(at(rp, "uMoon"), ...now.moon, now.moonRadius);
+    gl.uniform4f(uniformLocation(rp, "uMoon"), ...now.moon, now.moonRadius);
     gl.bindBuffer(gl.ARRAY_BUFFER, ravenBuf);
     gl.bufferData(
       gl.ARRAY_BUFFER,
       m.subarray(0, bird.count * RAVEN_STRIDE),
       gl.DYNAMIC_DRAW,
     );
-    const a = attrib(rp, "aPos", ravenBuf, 3, 4 * RAVEN_STRIDE, 0);
-    const b = attrib(rp, "aNormal", ravenBuf, 3, 4 * RAVEN_STRIDE, 12);
+    const a = bindAttribute(rp, "aPos", ravenBuf, 3, 4 * RAVEN_STRIDE, 0);
+    const b = bindAttribute(rp, "aNormal", ravenBuf, 3, 4 * RAVEN_STRIDE, 12);
     gl.drawArrays(gl.TRIANGLES, 0, bird.count);
     gl.disableVertexAttribArray(a);
     gl.disableVertexAttribArray(b);
@@ -1029,30 +1080,30 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
 
     const bp = ravenBlit!;
     gl.useProgram(bp);
-    gl.uniform4f(at(bp, "uRect"), ...rect);
-    gl.uniform1f(at(bp, "uAlpha"), bird.alpha);
+    gl.uniform4f(uniformLocation(bp, "uRect"), ...rect);
+    gl.uniform1f(uniformLocation(bp, "uAlpha"), bird.alpha);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    const q = attrib(bp, "aPos", square, 2);
+    const q = bindAttribute(bp, "aPos", square, 2);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.disableVertexAttribArray(q);
     gl.disable(gl.BLEND);
-  };
+  }
 
-  const stop = () => {
+  function stopLoop(): void {
     cancelFrame(raf);
     raf = 0;
-  };
+  }
 
-  const giveUp = () => {
-    stop();
+  function giveUp(): void {
+    stopLoop();
     level = 3;
     scope.postMessage("off");
-  };
+  }
 
   // If frames run long, step quality down; past the last level give up and
   // leave the page's CSS gradient showing.
-  const adapt = (elapsed: number) => {
+  function adaptQuality(elapsed: number): void {
     if (!tuning || elapsed > 250) return;
     total += elapsed;
     if (++samples < 45) return;
@@ -1062,44 +1113,44 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (!slow) {
       tuning = false;
     } else if (++level === 1) {
-      const lighter = compile(gl, QUAD_VS, skyFs(12, 260));
+      const lighter = compile(gl, QUAD_VS, skyFragmentShader(12, 260));
       if (lighter) {
-        setup(lighter);
+        setFixedUniforms(lighter);
         skyProgram = lighter;
       }
-      resize();
+      resizeCanvas();
     } else if (level === 2) {
       sparkCount = SPARKS / 2;
     } else {
       giveUp();
     }
-  };
+  }
 
-  const frame = (stamp: number) => {
-    raf = nextFrame(frame);
+  function onFrame(stamp: number): void {
+    raf = nextFrame(onFrame);
     const elapsed = stamp - last;
     if (elapsed < FRAME_MS - 2) return;
     if (last) {
       const dt = Math.min(elapsed, 100) / 1000;
       t += dt;
-      bird.step(dt, ravenView());
-      adapt(elapsed);
+      bird.step(dt, currentRavenView());
+      adaptQuality(elapsed);
     }
     last = stamp;
-    draw();
-  };
+    drawFrame();
+  }
 
-  const run = () => {
+  function startLoop(): void {
     if (raf || level > 2 || still || hidden) return;
     last = 0;
-    raf = nextFrame(frame);
-  };
+    raf = nextFrame(onFrame);
+  }
 
   canvas.addEventListener("webglcontextlost", giveUp);
-  resize();
-  draw();
+  resizeCanvas();
+  drawFrame();
   scope.postMessage("on");
-  run();
+  startLoop();
 
   // Stars arrive after the first frame so they never delay it, then the star
   // names for the tooltips. Without them the aurora still runs.
@@ -1109,10 +1160,10 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       if (level > 2) return;
       const data = starData(buf);
       starDirs = data;
-      starBuf = buffer(data);
+      starBuf = createStaticBuffer(data);
       starCount = data.length / 5;
       starsAt = still ? -Infinity : performance.now();
-      if (!raf) draw();
+      if (!raf) drawFrame();
       return fetch(new URL("/star-names.json", self.location.origin));
     })
     .then((res) => (res?.ok ? res.json() : []))
@@ -1134,41 +1185,41 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (data.type === "site") {
       held = NOTHING;
       bird.reset();
-      place(data.site);
-      skyAt = wall();
+      moveToSite(data.site);
+      skyAt = readWallClock();
       now = sky(site, skyAt);
       planetsAt = 0;
-      draw();
+      drawFrame();
       scope.postMessage("on");
     } else if (data.type === "size") {
       width = data.width;
       height = data.height;
-      resize();
-      draw();
-      follow();
-      times();
+      resizeCanvas();
+      drawFrame();
+      followHeld();
+      updateTimes();
     } else if (data.type === "still") {
       still = data.still;
       // A raven held still in mid-air would look wrong: it waits instead.
       if (still) bird.reset();
-      stop();
-      draw();
-      run();
+      stopLoop();
+      drawFrame();
+      startLoop();
     } else if (data.type === "hidden") {
       hidden = data.hidden;
-      if (hidden) stop();
+      if (hidden) stopLoop();
       else {
-        run();
-        times();
+        startLoop();
+        updateTimes();
       }
     } else if (data.type === "pick") {
-      scope.postMessage({ pick: pick(data.x, data.y, data.reach) });
+      scope.postMessage({ pick: pickNear(data.x, data.y, data.reach) });
     } else if (data.type === "drop") {
       held = NOTHING;
     } else if (data.type === "times") {
       if (data.want === wantTimes) return;
       wantTimes = data.want;
-      times();
+      updateTimes();
     }
   };
 }

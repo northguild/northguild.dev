@@ -2,8 +2,8 @@
 import {
   SITES,
   SKY_CREDITS,
-  compass,
-  coords,
+  compassWord,
+  formatCoordinates,
 } from "../scripts/aurora.sites";
 // The installed @northguild/gmt's version, read at build time so the footer
 // follows every upgrade. The package does not export its package.json, so
@@ -64,8 +64,8 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           {site.name}, {site.country}
         </p>
         <p>
-          Looking {compass(site.heading)} from {site.spot}.{" "}
-          {coords(site.lat, site.lon)}, eye height {site.eye}&nbsp;m.
+          Looking {compassWord(site.heading)} from {site.spot}.{" "}
+          {formatCoordinates(site.lat, site.lon)}, eye height {site.eye}&nbsp;m.
         </p>
         <ul class="sky-times" aria-label="Sun and moon in this window">
           <li data-body="sun">
@@ -190,13 +190,13 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const choices = [
     ...document.querySelectorAll<HTMLButtonElement>(".sky-sites button"),
   ];
-  const show = () => {
+  function showChosenSite(): void {
     sections.forEach((el, i) => (el.hidden = i !== site));
     choices.forEach((button, i) =>
       button.setAttribute("aria-pressed", String(i === site)),
     );
-  };
-  show();
+  }
+  showChosenSite();
   const info = document.querySelector<HTMLButtonElement>(".sky-info-button");
   let post: ((message: AuroraMessage) => void) | null = null;
 
@@ -204,18 +204,22 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   // stays, so the main thread never pays for the effect.
   const canvas = document.querySelector<HTMLCanvasElement>(".aurora canvas");
   if (canvas && "transferControlToOffscreen" in canvas) {
-    const go = () => {
+    function startWorker(canvas: HTMLCanvasElement): void {
       const worker = new Worker(
         new URL("../scripts/aurora.worker.ts", import.meta.url),
         { type: "module" },
       );
-      const send = (message: AuroraMessage, transfer: Transferable[] = []) =>
+      function sendToWorker(
+        message: AuroraMessage,
+        transfer: Transferable[] = [],
+      ): void {
         worker.postMessage(message, transfer);
-      post = send;
+      }
+      post = sendToWorker;
       const motion = matchMedia("(prefers-reduced-motion: reduce)");
       const style = getComputedStyle(document.documentElement);
       const offscreen = canvas.transferControlToOffscreen();
-      send(
+      sendToWorker(
         {
           type: "init",
           canvas: offscreen,
@@ -231,32 +235,32 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
         if (typeof data === "object") {
           if ("pick" in data) {
-            label(data.pick);
+            showPick(data.pick);
           } else if ("times" in data) {
-            showTimes(data.times, data.zone);
+            showSiteTimes(data.times, data.zone);
           } else {
             site = data.site;
-            show();
+            showChosenSite();
           }
           return;
         }
         const on = data === "on";
-        if (!on) label(null);
+        if (!on) showPick(null);
         canvas.classList.toggle("on", on);
         if (info) info.hidden = !on;
       };
       motion.addEventListener("change", () =>
-        send({ type: "still", still: motion.matches }),
+        sendToWorker({ type: "still", still: motion.matches }),
       );
       document.addEventListener("visibilitychange", () =>
-        send({ type: "hidden", hidden: document.hidden }),
+        sendToWorker({ type: "hidden", hidden: document.hidden }),
       );
       let timer = 0;
       new ResizeObserver(() => {
         clearTimeout(timer);
         timer = window.setTimeout(
           () =>
-            send({
+            sendToWorker({
               type: "size",
               width: canvas.clientWidth,
               height: canvas.clientHeight,
@@ -264,11 +268,11 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           150,
         );
       }).observe(canvas);
-    };
+    }
     if ("requestIdleCallback" in window) {
-      requestIdleCallback(go, { timeout: 1500 });
+      requestIdleCallback(() => startWorker(canvas), { timeout: 1500 });
     } else {
-      setTimeout(go, 200);
+      setTimeout(() => startWorker(canvas), 200);
     }
   }
 
@@ -277,15 +281,15 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const R = 8;
   /** The moon's lit part for its age (0 new, π full), lit on the right while
    * waxing, as seen from the north. */
-  const litPath = (age: number) => {
+  function moonLitPath(age: number): string {
     const waxing = age < Math.PI;
     const crescent = Math.cos(age) > 0;
     const rx = (R * Math.abs(Math.cos(age))).toFixed(2);
     const limb = waxing ? 1 : 0;
     const terminator = waxing === crescent ? 0 : 1;
     return `M12 ${12 - R}A${R} ${R} 0 0 ${limb} 12 ${12 + R}A${rx} ${R} 0 0 ${terminator} 12 ${12 - R}Z`;
-  };
-  const showTimes = (all: SiteTimes[], zone: string) => {
+  }
+  function showSiteTimes(all: SiteTimes[], zone: string): void {
     for (const el of document.querySelectorAll(".sky-times .zone")) {
       el.textContent = zone ? ` (${zone})` : "";
     }
@@ -301,22 +305,24 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       }
       const moon = section.querySelector('[data-body="moon"]');
       moon?.querySelector(".phase")?.replaceChildren(times.moon.phase);
-      moon?.querySelector(".lit")?.setAttribute("d", litPath(times.moon.age));
+      moon?.querySelector(".lit")?.setAttribute("d", moonLitPath(times.moon.age));
     });
-  };
+  }
   const popover = document.querySelector<HTMLElement>("#sky-info");
-  const want = (yes: boolean) => post?.({ type: "times", want: yes });
+  function requestTimes(yes: boolean): void {
+    post?.({ type: "times", want: yes });
+  }
   popover?.addEventListener("toggle", (event) =>
-    want((event as ToggleEvent).newState === "open"),
+    requestTimes((event as ToggleEvent).newState === "open"),
   );
   for (const type of ["pointerenter", "focus"]) {
-    info?.addEventListener(type, () => want(true));
+    info?.addEventListener(type, () => requestTimes(true));
   }
   // Leaving the button without opening the popover stops the search. Focus
   // moving into the open popover keeps it.
   for (const type of ["pointerleave", "blur"]) {
     info?.addEventListener(type, () => {
-      if (!popover?.matches(":popover-open")) want(false);
+      if (!popover?.matches(":popover-open")) requestTimes(false);
     });
   }
 
@@ -325,10 +331,13 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const tip = document.querySelector<HTMLElement>(".sky-tip");
   let over = false;
   let asked: [number, number, number] | null = null;
-  const bare = (target: EventTarget | null) =>
-    target === document.documentElement ||
-    target === document.body ||
-    (target instanceof HTMLElement && target.tagName === "MAIN");
+  function isBareSky(target: EventTarget | null): boolean {
+    return (
+      target === document.documentElement ||
+      target === document.body ||
+      (target instanceof HTMLElement && target.tagName === "MAIN")
+    );
+  }
 
   // The tooltip rises into place out of a soft blur, and fades away. Timing
   // comes from the theme's enter tokens; reduced motion keeps only the fade.
@@ -340,7 +349,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const calm = matchMedia("(prefers-reduced-motion: reduce)");
   let naming = "";
   let fade: Animation | null = null;
-  const name = (found: SkyLabel | null) => {
+  function showTooltip(found: SkyLabel | null): void {
     if (!tip) return;
     if (!found) {
       if (!naming) return;
@@ -387,7 +396,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           ],
       enter,
     );
-  };
+  }
 
   // Constellation lines: each run draws itself out from the hovered star, a
   // step at a time, and the whole figure fades away a moment after the
@@ -397,7 +406,10 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const sketch = document.querySelector<SVGSVGElement>(".sky-lines");
   let figure = "";
   let wipe = 0;
-  const polyline = ({ step, points }: SkyLine, drawn: boolean) => {
+  function constellationLine(
+    { step, points }: SkyLine,
+    drawn: boolean,
+  ): SVGPolylineElement {
     const line = document.createElementNS(
       "http://www.w3.org/2000/svg",
       "polyline",
@@ -407,8 +419,8 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     line.style.setProperty("--step", String(step));
     line.classList.toggle("drawn", drawn);
     return line;
-  };
-  const trace = (found: SkyLabel | null) => {
+  }
+  function traceConstellation(found: SkyLabel | null): void {
     if (!sketch) return;
     const next = (found?.lines && found.figure) || "";
     if (next === figure) {
@@ -420,7 +432,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       lines.forEach((line, k) => {
         const el = old[k];
         if (el) el.setAttribute("points", line.points.join(" "));
-        else sketch.append(polyline(line, true));
+        else sketch.append(constellationLine(line, true));
       });
       old.slice(lines.length).forEach((el) => el.remove());
       return;
@@ -438,23 +450,23 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     figure = next;
     sketch.classList.remove("out");
     sketch.replaceChildren(
-      ...(found?.lines ?? []).map((line) => polyline(line, false)),
+      ...(found?.lines ?? []).map((line) => constellationLine(line, false)),
     );
-  };
+  }
 
   // Once nothing is shown, the worker can stop following the last pick.
   let holding = false;
-  const label = (found: SkyLabel | null) => {
+  function showPick(found: SkyLabel | null): void {
     const shown =
       found && over && canvas?.classList.contains("on") ? found : null;
     if (holding && !shown) post?.({ type: "drop" });
     holding = !!shown;
-    name(shown);
-    trace(shown);
-  };
-  const point = (event: PointerEvent) => {
-    over = bare(event.target);
-    if (!over || !post) return label(null);
+    showTooltip(shown);
+    traceConstellation(shown);
+  }
+  function askAtPointer(event: PointerEvent): void {
+    over = isBareSky(event.target);
+    if (!over || !post) return showPick(null);
     const reach = event.pointerType === "mouse" ? 12 : 28;
     if (!asked) {
       requestAnimationFrame(() => {
@@ -466,21 +478,21 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       });
     }
     asked = [event.clientX, event.clientY, reach];
-  };
+  }
   document.addEventListener(
     "pointermove",
     (event) => {
-      if (event.pointerType !== "touch") point(event);
+      if (event.pointerType !== "touch") askAtPointer(event);
     },
     { passive: true },
   );
-  document.addEventListener("pointerdown", point, { passive: true });
+  document.addEventListener("pointerdown", askAtPointer, { passive: true });
   // A touch pointer "leaves" as the finger lifts, right after the tap that
   // asked; its label stays until the next tap instead.
   document.documentElement.addEventListener("pointerleave", (event) => {
     if (event.pointerType === "touch") return;
     over = false;
-    label(null);
+    showPick(null);
   });
 
   // Switching site: fade the sky out, swap, and fade back in when the worker
@@ -494,8 +506,8 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       } catch {}
       if (i === site) return;
       site = i;
-      show();
-      label(null);
+      showChosenSite();
+      showPick(null);
       if (!post || !canvas) return;
       canvas.classList.add("quick");
       canvas.classList.remove("on");

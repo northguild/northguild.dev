@@ -148,9 +148,11 @@ const POINTS = [
 ];
 
 /** Heading in degrees as a 16-point compass word, e.g. "north-northeast". */
-export const compass = (deg: number) =>
-  POINTS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16] ?? "north";
+export function compassWord(deg: number): string {
+  return POINTS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16] ?? "north";
+}
 
 /** Latitude and longitude as "66.0751° N, 23.1242° W". */
-export const coords = (lat: number, lon: number) =>
-  `${Math.abs(lat).toFixed(4)}° ${lat < 0 ? "S" : "N"}, ${Math.abs(lon).toFixed(4)}° ${lon < 0 ? "W" : "E"}`;
+export function formatCoordinates(lat: number, lon: number): string {
+  return `${Math.abs(lat).toFixed(4)}° ${lat < 0 ? "S" : "N"}, ${Math.abs(lon).toFixed(4)}° ${lon < 0 ? "W" : "E"}`;
+}

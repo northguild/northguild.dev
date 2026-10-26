@@ -28,7 +28,9 @@ const ARCSEC = RAD / 3600;
 
 // Julian day from epoch milliseconds: day 2440587.5 began at the epoch.
 const DAY = totalDuration("P1D", "milliseconds")!;
-const julian = (ms: number) => ms / DAY + 2440587.5;
+function julianDay(ms: number) {
+  return ms / DAY + 2440587.5;
+}
 // Terrestrial time runs ahead of the clock (UTC) by 32.184 s plus the leap
 // seconds so far (TAI − UTC, from gmt's table; read once, as none is due
 // within the year we look ahead). The moon moves half an arcsecond a second,
@@ -55,8 +57,19 @@ export function apply(m: Mat3, v: Vec3): Vec3 {
 }
 
 /** Column-major copy for gl.uniformMatrix3fv. */
-export const columns = (m: Mat3) =>
-  new Float32Array([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
+export function matrixColumns(m: Mat3) {
+  return new Float32Array([
+    m[0],
+    m[3],
+    m[6],
+    m[1],
+    m[4],
+    m[7],
+    m[2],
+    m[5],
+    m[8],
+  ]);
+}
 
 /** J2000 equatorial to mean equator of date (IAU 1976 precession). */
 function precession(t: number): Mat3 {
@@ -86,12 +99,14 @@ function horizon(lat: number, lst: number): Mat3 {
   return [-sl, cl, 0, cp * cl, cp * sl, sp, -sp * cl, -sp * sl, cp];
 }
 
-const ecliptic = (lon: number, lat: number, eps: number): Vec3 => {
+/** Ecliptic longitude and latitude to an equatorial unit vector, for an
+ * obliquity eps (radians). */
+function eclipticToEquatorial(lon: number, lat: number, eps: number): Vec3 {
   const [cb, sb] = [Math.cos(lat), Math.sin(lat)];
   const [cl, sl] = [Math.cos(lon), Math.sin(lon)];
   const [ce, se] = [Math.cos(eps), Math.sin(eps)];
   return [cb * cl, cb * sl * ce - sb * se, cb * sl * se + sb * ce];
-};
+}
 
 // Meeus table 47.A: D, M, M', F, longitude (1e-6°), distance (1e-3 km).
 const MOON_LR: number[][] = [
@@ -418,10 +433,10 @@ export function planets(t: number): Float32Array {
   return out;
 }
 
-const smoothstep = (a: number, b: number, x: number) => {
+function smoothstep(a: number, b: number, x: number) {
   const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return k * k * (3 - 2 * k);
-};
+}
 
 /** Fraction of a disc of radius a left uncovered by a disc of radius b whose
  * centre is d away (small angles, so flat geometry). */
@@ -465,10 +480,10 @@ export function lift(d: Vec3): Vec3 {
   return [d[0] * c, Math.sin(seen), d[2] * c];
 }
 
-const normalize = (v: Vec3): Vec3 => {
+function normalize(v: Vec3): Vec3 {
   const l = Math.hypot(v[0], v[1], v[2]);
   return [v[0] / l, v[1] / l, v[2] / l];
-};
+}
 
 export type Sky = {
   /** J2000 equatorial to world, for the star catalogue. */
@@ -499,7 +514,7 @@ export type Sky = {
  * the clock), local sidereal time, latitude, the equatorial-to-world matrix
  * and the obliquity. */
 function frame(site: Site, ms: number) {
-  const jd = julian(ms);
+  const jd = julianDay(ms);
   const t = (jd + DELTA_T - 2451545) / 36525;
   const gmst =
     (280.46061837 + 360.98564736629 * (jd - 2451545) + 0.000387933 * t * t) *
@@ -553,11 +568,11 @@ export function sunAndMoon(
   const { t, lst, lat, hor, eps } = frame(site, ms);
   const [ml, mb, dist] = moonEcliptic(t);
   const sl = sunLongitude(t);
-  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+  const geo = eclipticToEquatorial(ml, mb, eps).map((c) => c * dist) as Vec3;
   const topo = topocentric(geo, lat, lst);
   const age = (((ml - sl) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
   return {
-    sun: lift(normalize(apply(hor, ecliptic(sl, 0, eps)))),
+    sun: lift(normalize(apply(hor, eclipticToEquatorial(sl, 0, eps)))),
     sunRadius: sunRadiusAt(t),
     moon: lift(normalize(apply(hor, topo))),
     moonRadius: Math.asin(1737.4 / Math.hypot(...topo)),
@@ -571,14 +586,18 @@ export function sky(site: Site, ms: number): Sky {
 
   // Topocentric moon: subtract the observer's position from the geocentric one.
   const [ml, mb, dist] = moonEcliptic(t);
-  const geo = ecliptic(ml, mb, eps).map((c) => c * dist) as Vec3;
+  const geo = eclipticToEquatorial(ml, mb, eps).map((c) => c * dist) as Vec3;
   const topo = topocentric(geo, lat, lst);
   const range = Math.hypot(...topo);
   const moon = normalize(apply(hor, topo));
-  const sun = normalize(apply(hor, ecliptic(sunLongitude(t), 0, eps)));
+  const sun = normalize(
+    apply(hor, eclipticToEquatorial(sunLongitude(t), 0, eps)),
+  );
   const moonNorth = normalize(apply(hor, [0, -Math.sin(eps), Math.cos(eps)]));
 
-  const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function dotProduct(a: Vec3, b: Vec3) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  }
   const moonRadius = Math.asin(1737.4 / range);
 
   // Solar eclipse: how much of the sun's disc the moon leaves showing.
@@ -587,13 +606,13 @@ export function sky(site: Site, ms: number): Sky {
   const sunVisible = uncovered(
     sunRadius,
     moonRadius,
-    Math.acos(Math.min(1, dot(sun, moon))),
+    Math.acos(Math.min(1, dotProduct(sun, moon))),
   );
 
   // Lunar eclipse: Earth's shadow cone where the moon crosses it. The
   // atmosphere widens the earth by 1/85 (Danjon's rule, as eclipse tables use).
   const mw = apply(hor, geo);
-  const behind = -dot(mw, sun);
+  const behind = -dotProduct(mw, sun);
   const shadow = mw.map((c, i) => (sun[i]! * -behind - c) / 1737.4) as Vec3;
   const sunKm = au * 149597870.7;
   // Radii below zero: the moon is on the sun's side, out of the shadow.
@@ -604,11 +623,11 @@ export function sky(site: Site, ms: number): Sky {
     behind > 0 ? (earth + (behind * (696000 + 6367.5)) / sunKm) / 1737.4 : -1;
   // Sunlight left at the centre of the moon's face.
   const q = moon.map((c, i) => -c - shadow[i]!) as Vec3;
-  const off = q.map((c, i) => c - sun[i]! * dot(q, sun)) as Vec3;
+  const off = q.map((c, i) => c - sun[i]! * dotProduct(q, sun)) as Vec3;
   const sunlit = smoothstep(umbra, penumbra, Math.hypot(...off));
 
   // Illuminated fraction from the sun–moon angle, faded by moon altitude.
-  const lit = (1 - dot(sun, moon)) / 2;
+  const lit = (1 - dotProduct(sun, moon)) / 2;
   const alt = Math.asin(moon[1]) / RAD;
   const up = Math.min(1, Math.max(0, (alt + 2) / 17));
   // Drawn where they are seen: lifted by refraction. The eclipse geometry

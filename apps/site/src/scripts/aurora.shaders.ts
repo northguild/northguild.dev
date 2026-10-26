@@ -108,7 +108,8 @@ void main() {
 }
 `;
 
-export const skyFs = (steps: number, top: number) => `${COMMON}
+export function skyFragmentShader(steps: number, top: number): string {
+  return `${COMMON}
 #define STEPS ${steps}
 uniform sampler2D uMap, uMoonTex;
 uniform vec3 uVoid, uTeal, uIce;
@@ -330,6 +331,7 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }
 `;
+}
 
 const PROJECT = `
 uniform mat3 uCam;

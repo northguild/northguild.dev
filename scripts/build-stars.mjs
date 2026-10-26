@@ -36,7 +36,9 @@ const text = gunzipSync(Buffer.from(await res.arrayBuffer())).toString(
 );
 
 // Byte ranges from the catalogue ReadMe (1-based, inclusive).
-const field = (line, from, to) => line.slice(from - 1, to).trim();
+function fixedWidthField(line, from, to) {
+  return line.slice(from - 1, to).trim();
+}
 
 // Bayer letters as the catalogue abbreviates them.
 const GREEK = {
@@ -73,31 +75,31 @@ const byHr = new Map();
 /** Fallback label for each record, by index: designation or HR number. */
 const designations = [];
 for (const line of text.split("\n")) {
-  const raH = field(line, 76, 77);
-  const vmag = field(line, 103, 107);
+  const raH = fixedWidthField(line, 76, 77);
+  const vmag = fixedWidthField(line, 103, 107);
   // Blank coordinates are entries removed from the catalogue (novae, clusters).
   if (!raH || !vmag) continue;
   const v = Number(vmag);
   if (v > LIMIT) continue;
   const ra =
     (Number(raH) +
-      Number(field(line, 78, 79)) / 60 +
-      Number(field(line, 80, 83)) / 3600) *
+      Number(fixedWidthField(line, 78, 79)) / 60 +
+      Number(fixedWidthField(line, 80, 83)) / 3600) *
     15;
-  const sign = field(line, 84, 84) === "-" ? -1 : 1;
+  const sign = fixedWidthField(line, 84, 84) === "-" ? -1 : 1;
   const dec =
     sign *
-    (Number(field(line, 85, 86)) +
-      Number(field(line, 87, 88)) / 60 +
-      Number(field(line, 89, 90)) / 3600);
-  const bv = Number(field(line, 110, 114) || "0.6");
-  const hr = Number(field(line, 1, 4));
+    (Number(fixedWidthField(line, 85, 86)) +
+      Number(fixedWidthField(line, 87, 88)) / 60 +
+      Number(fixedWidthField(line, 89, 90)) / 3600);
+  const bv = Number(fixedWidthField(line, 110, 114) || "0.6");
+  const hr = Number(fixedWidthField(line, 1, 4));
   // Name field: Flamsteed number, Bayer letter, its superscript, constellation.
   const [flamsteed, bayer, index, con] = [
-    field(line, 5, 7),
-    field(line, 8, 10),
-    field(line, 11, 11),
-    field(line, 12, 14),
+    fixedWidthField(line, 5, 7),
+    fixedWidthField(line, 8, 10),
+    fixedWidthField(line, 11, 11),
+    fixedWidthField(line, 12, 14),
   ];
   const genitive = GENITIVES[con];
   const letter = GREEK[bayer];
@@ -130,11 +132,13 @@ const namesRes = await fetch(NAMES);
 if (!namesRes.ok) throw new Error(`star names: HTTP ${namesRes.status}`);
 const lines = (await namesRes.text()).split("\n");
 const header = lines.find((l) => l.startsWith("#Name/ASCII")) ?? "";
-const col = (label) => header.indexOf(label);
+function columnIndex(label) {
+  return header.indexOf(label);
+}
 const [nameAt, designAt, conAt] = [
-  col("Name/Diacritics"),
-  col("Designation"),
-  col("Con"),
+  columnIndex("Name/Diacritics"),
+  columnIndex("Designation"),
+  columnIndex("Con"),
 ];
 const names = [];
 for (const line of lines) {

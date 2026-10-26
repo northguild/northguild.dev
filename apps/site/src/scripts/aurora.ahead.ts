@@ -48,16 +48,18 @@ const LOCALE =
     l.toLowerCase().startsWith("en"),
   ) ?? "en-GB";
 /** An ISO 8601 duration (a constant, so always valid) in milliseconds. */
-const ms = (iso: string) => totalDuration(iso, "milliseconds")!;
-const HOUR = ms("PT1H");
+function durationMs(iso: string): number {
+  return totalDuration(iso, "milliseconds")!;
+}
+const HOUR = durationMs("PT1H");
 // No point on the sky moves faster than 15° an hour as the earth turns; the
 // moon adds about half a degree. So a body this far from the frame cannot
 // reach it sooner than angle / RATE, and the search skips ahead that much.
 const RATE = (16 * Math.PI) / 180 / HOUR;
 // Near the frame, a step a minute, so even the briefest spell (the sun
 // peeking between peaks) is caught; each edge is then refined by halving.
-const STEP = ms("PT1M");
-const EDGE = ms("PT10S");
+const STEP = durationMs("PT1M");
+const EDGE = durationMs("PT10S");
 // Steps per slice, so the sky keeps drawing while we look.
 const SLICE = 1500;
 // How high the sun must be seen to count: the sky fades the sun, its halo
@@ -86,7 +88,9 @@ function* spell(
   until: number,
   longest: number,
 ): Generator<void, [number, number | null] | null> {
-  const seen = (ms: number) => away(ms) === 0;
+  function isInView(ms: number): boolean {
+    return away(ms) === 0;
+  }
   let n = 0;
   let t = from;
   let far = away(t);
@@ -96,7 +100,7 @@ function* spell(
       if (next > until) return null;
       const then = away(next);
       if (then === 0) {
-        t = edge(seen, t, next);
+        t = edge(isInView, t, next);
         break;
       }
       [t, far] = [next, then];
@@ -104,11 +108,13 @@ function* spell(
     }
   }
   const start = t;
-  const gone = (ms: number) => !seen(ms);
+  function isOutOfView(ms: number): boolean {
+    return !isInView(ms);
+  }
   const cap = start + longest;
   while (t < cap) {
     const next = t + STEP;
-    if (gone(next)) return [start, edge(gone, t, next)];
+    if (isOutOfView(next)) return [start, edge(isOutOfView, t, next)];
     t = next;
     if (++n % SLICE === 0) yield;
   }
@@ -135,41 +141,45 @@ function phaseText(age: number, lit: number): string {
   return `${name}, ${Math.round(lit * 100)}% lit`;
 }
 
-const capital = (text: string) =>
-  text.charAt(0).toLocaleUpperCase() + text.slice(1);
+function capitalize(text: string): string {
+  return text.charAt(0).toLocaleUpperCase() + text.slice(1);
+}
 
 /** "today at 21:40", "tomorrow at 02:10", "in 3 days at …", then a date. */
-const day = (ms: number, now: number) =>
-  formatCalendarUnix(ms, LOCALE, { ...LOCAL, reference: now });
+function formatDay(ms: number, now: number) {
+  return formatCalendarUnix(ms, LOCALE, { ...LOCAL, reference: now });
+}
 
 /** The time alone when it falls on the same local day as `ref`. */
-const until = (ms: number, ref: number, now: number) =>
-  areUnixEqualBy(ms, ref, "day", LOCAL)
+function formatEndTime(ms: number, ref: number, now: number) {
+  return areUnixEqualBy(ms, ref, "day", LOCAL)
     ? formatUnix(ms, LOCALE, { ...LOCAL, timeStyle: "short" })
-    : day(ms, now);
+    : formatDay(ms, now);
+}
 
 function describe(
   found: [number, number | null] | null,
   now: number,
 ): BodyTimes {
   if (!found) return { now: false, when: "Not in view in the coming year" };
-  const minute = (ms: number) =>
-    roundUnix(ms, { smallestUnit: "minute", ...LOCAL }) ?? ms;
+  function roundToMinute(ms: number): number {
+    return roundUnix(ms, { smallestUnit: "minute", ...LOCAL }) ?? ms;
+  }
   const [start, end] = found;
   if (start === now) {
     return {
       now: true,
       when: end
-        ? `In view now, until ${until(minute(end), now, now)}`
+        ? `In view now, until ${formatEndTime(roundToMinute(end), now, now)}`
         : "In view now",
     };
   }
-  const from = minute(start);
+  const from = roundToMinute(start);
   return {
     now: false,
     when: end
-      ? `${capital(day(from, now))} – ${until(minute(end), from, now)}`
-      : capital(day(from, now)),
+      ? `${capitalize(formatDay(from, now))} – ${formatEndTime(roundToMinute(end), from, now)}`
+      : capitalize(formatDay(from, now)),
   };
 }
 
@@ -184,7 +194,7 @@ export function* lookAhead(
 ): Generator<void, { times: SiteTimes[]; next: number }> {
   // A year ahead on the calendar; on bad input, no search at all.
   const year = addUnix(now, { years: 1 }, LOCAL) ?? now;
-  const longest = ms("P2D");
+  const longest = durationMs("P2D");
   const midnight = (endOfUnix(now, "day", LOCAL) ?? now + HOUR) + 1;
   let next = Math.min(now + HOUR, midnight);
   const times: SiteTimes[] = [];

@@ -7,6 +7,9 @@ Styling and config rules are in [CLAUDE.md § Rules](../CLAUDE.md#rules).
 
 - Declare named functions with the `function` keyword, not
   `const name = () => …`. Arrow functions are for inline callbacks only.
+- Name a function for what it does or returns: `randomBetween`, not `rand`;
+  `requestTimes`, not `want`. Short parameter names are fine where they are
+  the maths convention (`a`, `b`, `k`).
 - No IIFEs. To compute a value once, write a named function and call it:
 
   ```ts
