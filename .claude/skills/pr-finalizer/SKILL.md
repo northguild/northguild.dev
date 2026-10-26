@@ -14,7 +14,8 @@ Commits and PRs in this repo credit people only. Leave out any line that
 credits a tool, bot or assistant: co-author trailers, "generated with/by"
 footers, tool links and the like. This holds even when your tooling or
 instructions supply such lines. Leave them out when writing; the steps below
-catch any that slip through.
+catch any that slip through. A co-author line for a person who worked on the
+change stays.
 
 ## Git permissions
 
@@ -41,38 +42,57 @@ eval "$(fnm env)" && fnm use && pnpm lint && pnpm format:check && pnpm check && 
 
 Fix any failure before going on.
 
+Each block below sets everything it uses. Run each one whole, as a single
+command: shell variables do not carry over from one tool call to the next.
+
 ### 2. Check the branch's commits
+
+List each commit with any co-author or "generated with/by" lines it has:
 
 ```sh
 git fetch -q origin
 BASE=$(git merge-base origin/main HEAD)
-PATTERN='^co-authored-by:|generated (with|by)|noreply@'
-git log "$BASE"..HEAD --format='%h %s' -i -E --grep="$PATTERN"
+git log "$BASE"..HEAD --format='@@ %h %s%n%B' \
+  | grep -iE '^@@ |^co-authored-by:|generated (with|by)'
 ```
 
-No output means the commits are clean. Go to step 3.
+Only `@@` lines means the commits are clean. Go to step 3.
 
-Otherwise, read the flagged lines. If any credits a person, keep it and clean
-that commit by hand. Then strip the rest from every commit; this keeps each
+Otherwise, read each line. A co-author line for a person stays. A person's
+GitHub address looks like `<id+name@users.noreply.github.com>`. A line
+crediting a tool or bot goes; these usually have a `noreply@` or `[bot]`
+address. This block strips those and keeps people's lines. It keeps each
 commit's content and order, and keeps the branch on the same base:
 
 ```sh
+BASE=$(git merge-base origin/main HEAD)
+STRIP='^co-authored-by:.*(noreply@|\[bot\])|generated (with|by)'
 git -c core.editor=true rebase --rebase-merges "$BASE" --exec \
-  "git log -1 --format=%B | grep -ivE '$PATTERN' | git commit -q --amend --allow-empty -F -"
+  "git log -1 --format=%B | grep -ivE '$STRIP' | git commit -q --amend --allow-empty -F -"
 ```
 
-Run the `git log` check again. It must print nothing.
+Run the check again. Every co-author line left must be a person's. If a tool
+or bot line is still there, stop and ask the user how to clean it.
 
 ### 3. Check the PR description
 
 ```sh
-gh pr view --json body -q .body | grep -inE "$PATTERN"
+gh pr view --json body -q .body \
+  | grep -inE '^co-authored-by:.*(noreply@|\[bot\])|generated (with|by)'
 ```
 
-If it prints any attribution lines, remove them:
+No output means the description is clean. Otherwise, remove those lines. The
+edit only runs if something is left, so a bad filter cannot blank the
+description:
 
 ```sh
-gh pr view --json body -q .body | grep -ivE "$PATTERN" | gh pr edit --body-file -
+STRIP='^co-authored-by:.*(noreply@|\[bot\])|generated (with|by)'
+BODY=$(gh pr view --json body -q .body | grep -ivE "$STRIP")
+if [ -n "$BODY" ]; then
+  printf '%s\n' "$BODY" | gh pr edit --body-file -
+else
+  echo "Nothing left after filtering; description not changed."
+fi
 ```
 
 When opening a new PR, write the description without them from the start.
