@@ -176,14 +176,16 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     ...document.querySelectorAll<HTMLElement>("#sky-info [data-site]"),
   ];
   const ids = sections.map((el) => el.dataset.site ?? "");
-  // Storage can be blocked or throw (private windows, blocked site data).
-  const chosen = (() => {
+  // The index of the site kept in this browser, or -1 if none. Storage can be
+  // blocked or throw (private windows, blocked site data).
+  function storedSite(): number {
     try {
       return ids.indexOf(localStorage.getItem(SITE_KEY) ?? "");
     } catch {
       return -1;
     }
-  })();
+  }
+  const chosen = storedSite();
   let site = Math.max(chosen, 0);
   const choices = [
     ...document.querySelectorAll<HTMLButtonElement>(".sky-sites button"),

@@ -83,16 +83,19 @@ const BODY: [number, number, number, number][] = [
 ];
 const SIDES = 8;
 
-/** The body is rigid: its triangles once, in the bird's frame. */
-const BODY_TRIS: V[] = (() => {
-  const ring = (i: number) =>
-    Array.from({ length: SIDES }, (_, j): V => {
-      const [z, y, rx, ry] = BODY[i]!;
-      const a = (2 * Math.PI * j) / SIDES;
-      return [rx * Math.cos(a), y + ry * Math.sin(a), z];
-    });
+/** One body station as a ring of points, in the bird's frame. */
+function bodyRing(i: number): V[] {
+  return Array.from({ length: SIDES }, (_, j): V => {
+    const [z, y, rx, ry] = BODY[i]!;
+    const a = (2 * Math.PI * j) / SIDES;
+    return [rx * Math.cos(a), y + ry * Math.sin(a), z];
+  });
+}
+
+/** The body's triangles, in the bird's frame. */
+function bodyTriangles(): V[] {
   const out: V[] = [];
-  const rings = BODY.map((_, i) => ring(i));
+  const rings = BODY.map((_, i) => bodyRing(i));
   for (let i = 0; i + 1 < rings.length; i++) {
     const [r0, r1] = [rings[i]!, rings[i + 1]!];
     for (let j = 0; j < SIDES; j++) {
@@ -106,7 +109,10 @@ const BODY_TRIS: V[] = (() => {
     out.push([0, y0, z0], rings[0]![(j + 1) % SIDES]!, rings[0]![j]!);
   }
   return out;
-})();
+}
+
+/** The body is rigid: its triangles are built once. */
+const BODY_TRIS = bodyTriangles();
 
 /** Right wing, flat: the arm from the shoulder to the wrist, then the hand.
  * x outward, z forward, at the height of the shoulder. */
