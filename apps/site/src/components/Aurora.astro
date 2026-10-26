@@ -194,6 +194,8 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const choices = [
     ...document.querySelectorAll<HTMLButtonElement>(".sky-sites button"),
   ];
+  // The part of the popover under the switcher, which scrolls.
+  const details = document.querySelector<HTMLElement>(".sky-info-body");
   function showChosenSite(): void {
     sections.forEach((el, i) => (el.hidden = i !== site));
     choices.forEach((button, i) =>
@@ -511,6 +513,9 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       if (i === site) return;
       site = i;
       showChosenSite();
+      // Open the new site at its name, not part-way down where the last
+      // one was scrolled to.
+      details?.scrollTo({ top: 0 });
       showPick(null);
       if (!post || !canvas) return;
       canvas.classList.add("quick");
