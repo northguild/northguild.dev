@@ -57,6 +57,9 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
       ))
     }
   </div>
+  <!-- Everything under the switcher scrolls, so the switcher stays in view
+       on short screens. -->
+  <div class="sky-info-body">
   {
     SITES.map((site, i) => (
       <section data-site={site.id} hidden={i !== 0}>
@@ -145,6 +148,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   <p class="sky-footer">
     Site runs on <a href="/gmt/">@northguild/gmt</a> v{gmtVersion}
   </p>
+  </div>
 </div>
 
 <script>
@@ -656,16 +660,37 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     position: fixed;
     inset: auto 12px 52px auto;
     margin: 0;
-    width: min(22rem, calc(100vw - 24px));
+    width: min(28rem, calc(100vw - 24px));
+    /* Fits between the window's top and the info button below it. dvh
+       follows mobile browser toolbars; vh is the fallback. */
+    max-height: calc(100vh - 64px);
+    max-height: calc(100dvh - 64px);
     color: var(--gmt-ice-dim);
     font-size: var(--gmt-text-xs);
     line-height: 1.5;
+  }
+  /* Only while open: a display set on the closed popover would show it. */
+  .sky-info:popover-open {
+    display: flex;
+    flex-direction: column;
+  }
+  /* The panel itself does not scroll, so its glass edges stay put. The
+     negative margin puts the scrollbar in the panel's padding. */
+  .sky-info-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    margin-right: calc(-1 * var(--gmt-space-2));
+    padding-right: var(--gmt-space-2);
   }
   .sky-info p {
     margin: 0 0 0.5rem;
   }
   /* Location switcher: a row of chips, the current one lit. */
   .sky-sites {
+    flex: none;
     display: flex;
     flex-wrap: wrap;
     gap: var(--gmt-space-2);
