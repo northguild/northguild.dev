@@ -1,5 +1,8 @@
 # northguild.dev — Claude Code Entry Point
 
+**Read before writing or reviewing code:**
+[context/coding-standards.md](./context/coding-standards.md).
+
 ## Git — read before any `git` or `gh` command
 
 **Default: never stage, commit, branch, push or open a PR on your own
