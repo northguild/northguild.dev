@@ -73,4 +73,98 @@ const { title, description = "NorthGuild: open-source tools for developers." } =
   a {
     color: var(--gmt-cyan);
   }
+  /* ---- Entrance ----
+   * Each block condenses out of the sky like a curtain of aurora drifting
+   * across: a soft-edged band of light passes left to right, the blur clears
+   * behind it, and the green-to-cyan tint it carries settles into the usual
+   * ice. Nothing moves; it only comes into focus. `.ng-enter-text` is for type,
+   * `.ng-enter-pane` for glass (it tints the border and glow instead). Set
+   * `--ng-delay` to stagger.
+   *
+   * `backwards` only: once it ends every property falls back to the normal
+   * style, so no filter or mask is left on the glass. The last keyframe is
+   * that normal look, so there is no jump. */
+  .ng-enter-text,
+  .ng-enter-pane {
+    --ng-aurora: color-mix(in oklab, var(--gmt-spring) 45%, var(--gmt-cyan));
+    --ng-sweep: linear-gradient(100deg, #000 38%, transparent 62%);
+    mask-size: 300% 100%;
+    /* Let the blur and glow spill past the box instead of stopping at a hard
+       edge: the mask repeats up and down and paints outside the box. */
+    mask-repeat: repeat-y;
+    mask-clip: no-clip;
+    /* Longhands: the build's minifier turns this shorthand into
+       `animation: none`. */
+    animation-duration: 2.4s;
+    animation-timing-function: cubic-bezier(0.25, 0.6, 0.2, 1);
+    animation-fill-mode: backwards;
+    animation-delay: var(--ng-delay, 0s);
+  }
+  .ng-enter-text {
+    animation-name: ng-aurora-text;
+  }
+  .ng-enter-pane {
+    animation-name: ng-aurora-pane;
+  }
+
+  /* The clear box-shadow is never seen. Chrome only paints a mask over the
+     box and its shadows, so it gives the text's blur and glow room to fade
+     out instead of stopping at the box's edge. */
+  @keyframes ng-aurora-text {
+    0% {
+      mask-image: var(--ng-sweep);
+      mask-position: 100% 0;
+      filter: blur(12px);
+      color: var(--ng-aurora);
+      text-shadow: 0 0 24px color(from var(--ng-aurora) srgb r g b / 0.7);
+      box-shadow: 0 0 48px 32px transparent;
+    }
+    45% {
+      filter: blur(3px);
+      color: var(--ng-aurora);
+      text-shadow: 0 0 18px color(from var(--ng-aurora) srgb r g b / 0.45);
+    }
+    100% {
+      mask-image: var(--ng-sweep);
+      mask-position: 0% 0;
+      filter: blur(0);
+      text-shadow: 0 0 0 transparent;
+      box-shadow: 0 0 48px 32px transparent;
+    }
+  }
+
+  @keyframes ng-aurora-pane {
+    0% {
+      mask-image: var(--ng-sweep);
+      mask-position: 100% 0;
+      filter: blur(10px);
+      border-color: color(from var(--ng-aurora) srgb r g b / 0.6);
+      box-shadow: 0 0 40px -6px color(from var(--ng-aurora) srgb r g b / 0.4);
+    }
+    45% {
+      filter: blur(2px);
+      border-color: color(from var(--ng-aurora) srgb r g b / 0.4);
+      box-shadow: 0 0 32px -6px color(from var(--ng-aurora) srgb r g b / 0.25);
+    }
+    100% {
+      mask-image: var(--ng-sweep);
+      mask-position: 0% 0;
+      filter: blur(0);
+    }
+  }
+
+  /* Reduced motion: no drifting light or blur, just a short fade. */
+  @media (prefers-reduced-motion: reduce) {
+    .ng-enter-text,
+    .ng-enter-pane {
+      animation-name: ng-fade;
+      animation-duration: 0.6s;
+      animation-delay: 0s;
+    }
+  }
+  @keyframes ng-fade {
+    from {
+      opacity: 0;
+    }
+  }
 </style>

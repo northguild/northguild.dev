@@ -24,18 +24,42 @@ const repos = [
 
 <Base title="NorthGuild">
   <Aurora />
-  <h1>NorthGuild</h1>
-  <p class="intro">Open-source tools for developers, built in the frigid north.</p>
+  <h1 class="ng-enter-text">NorthGuild</h1>
+  <p class="intro ng-enter-text">Open-source tools for developers, built in the frigid north.</p>
   <div class="grid">
-    {repos.map((r) => <RepoCard {...r} />)}
+    {repos.map((r, i) => <RepoCard {...r} order={i} />)}
   </div>
 </Base>
 
 <style>
+  /* The sky only answers the pointer over bare page (Aurora.astro,
+     `isBareSky`), so each block is only as wide as its own text, and the grid
+     lets the pointer through its gaps to the sky behind. */
+  h1,
+  .intro {
+    inline-size: fit-content;
+  }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
     gap: 1rem;
     margin-top: 2rem;
+    pointer-events: none;
+  }
+  .grid > :global(*) {
+    pointer-events: auto;
+  }
+
+  /* The entrance (`.ng-enter-*`, Base.astro): the header leads, then the
+     title, the line under it, and the cards in turn, landing as the sky's own
+     fade-in (1.6s) finishes. */
+  h1 {
+    --ng-delay: 0.25s;
+  }
+  .intro {
+    --ng-delay: 0.55s;
+  }
+  .grid > :global(*) {
+    --ng-delay: calc(0.9s + var(--order, 0) * 0.25s);
   }
 </style>
