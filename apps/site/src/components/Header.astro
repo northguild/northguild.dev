@@ -1,6 +1,12 @@
 ---
 import NorthGuildMark from "./NorthGuildMark.astro";
 
+interface Props {
+  /** Plays the aurora entrance (`.ng-enter-pane`, Base.astro). */
+  entrance?: boolean;
+}
+const { entrance = false } = Astro.props;
+
 const links = [
   {
     label: "NorthGuild on GitHub",
@@ -15,7 +21,9 @@ const links = [
 ];
 ---
 
-<header class="gmt-glass site-header ng-enter-pane">
+<header
+  class:list={["gmt-glass", "site-header", { "ng-enter-pane": entrance }]}
+>
   <div class="wordmark"><NorthGuildMark />NorthGuild</div>
   <nav aria-label="NorthGuild community">
     {

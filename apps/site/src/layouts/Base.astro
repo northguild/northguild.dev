@@ -7,9 +7,16 @@ import Header from "../components/Header.astro";
 interface Props {
   title: string;
   description?: string;
+  /** Plays the aurora entrance on the header. The page's own blocks opt in
+      with `.ng-enter-*`, so a page that sets this should stagger them after
+      it. */
+  entrance?: boolean;
 }
-const { title, description = "NorthGuild: open-source tools for developers." } =
-  Astro.props;
+const {
+  title,
+  description = "NorthGuild: open-source tools for developers.",
+  entrance = false,
+} = Astro.props;
 ---
 
 <!doctype html>
@@ -30,7 +37,7 @@ const { title, description = "NorthGuild: open-source tools for developers." } =
     />
   </head>
   <body>
-    <Header />
+    <Header entrance={entrance} />
     <main>
       <slot />
     </main>
