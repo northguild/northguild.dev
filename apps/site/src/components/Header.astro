@@ -1,4 +1,12 @@
 ---
+import NorthGuildMark from "./NorthGuildMark.astro";
+
+interface Props {
+  /** Plays the aurora entrance (`.ng-enter-pane`, Base.astro). */
+  entrance?: boolean;
+}
+const { entrance = false } = Astro.props;
+
 const links = [
   {
     label: "NorthGuild on GitHub",
@@ -13,8 +21,10 @@ const links = [
 ];
 ---
 
-<header class="gmt-glass site-header">
-  <a class="wordmark" href="/">NorthGuild</a>
+<header
+  class:list={["gmt-glass", "site-header", { "ng-enter-pane": entrance }]}
+>
+  <div class="wordmark"><NorthGuildMark />NorthGuild</div>
   <nav aria-label="NorthGuild community">
     {
       links.map((l) => (
@@ -56,14 +66,13 @@ const links = [
     display: none;
   }
   .wordmark {
+    display: inline-flex;
+    align-items: center;
+    /* Matches the space either side of the GMT header's divider. */
+    gap: var(--gmt-space-6);
     font-family: var(--gmt-font-display);
     color: var(--gmt-ice);
-    text-decoration: none;
     letter-spacing: 0.04em;
-  }
-  .wordmark:focus-visible {
-    outline: 2px solid var(--gmt-cyan);
-    outline-offset: 4px;
   }
   nav {
     display: flex;

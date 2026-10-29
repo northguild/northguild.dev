@@ -4,11 +4,13 @@ interface Props {
   description: string;
   docsHref: string;
   githubHref: string;
+  /** Position in the list, for the page's staggered entrance. */
+  order?: number;
 }
-const { name, description, docsHref, githubHref } = Astro.props;
+const { name, description, docsHref, githubHref, order = 0 } = Astro.props;
 ---
 
-<article class="gmt-glass repo-card">
+<article class="gmt-glass repo-card ng-enter-pane" style={`--order: ${order}`}>
   <h2>{name}</h2>
   <p>{description}</p>
   <div class="links">
