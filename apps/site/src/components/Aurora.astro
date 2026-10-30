@@ -155,6 +155,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   import type { SiteTimes } from "../scripts/aurora.ahead";
   import type {
     AuroraMessage,
+    PageBox,
     SkyLabel,
     SkyLine,
     WorkerMessage,
@@ -206,6 +207,61 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   const info = document.querySelector<HTMLButtonElement>(".sky-info-button");
   let post: ((message: AuroraMessage) => void) | null = null;
 
+  // Huginn's fly-in draws in the header, title, intro and cards as he
+  // reaches them. Base.astro hides them (`ng-await`) until the worker says
+  // he has reached each one; without a fly-in they come in by the usual
+  // entrance instead. The panes go first (the header, then the cards):
+  // the worker plans his path through the first two.
+  const page = document.documentElement;
+  const panes = page.classList.contains("ng-await")
+    ? [
+        ...document.querySelectorAll<HTMLElement>(".ng-enter-pane"),
+        ...document.querySelectorAll<HTMLElement>(".ng-enter-text"),
+      ]
+    : [];
+  function isAwaiting(): boolean {
+    return page.classList.contains("ng-await");
+  }
+  function paneBoxes(): PageBox[] {
+    if (!isAwaiting()) return [];
+    return panes.map((el) => {
+      const r = el.getBoundingClientRect();
+      return [r.left, r.top, r.width, r.height];
+    });
+  }
+  function showAllPanes(): void {
+    page.classList.remove("ng-await");
+  }
+  let lastAngle = 135;
+  let backstop = 0;
+  // Sweep the pane in toward `angle` (a CSS gradient angle), drifting a
+  // little along his line, over `duration` seconds.
+  function brushPane(i: number, angle: number, duration: number): void {
+    const el = panes[i];
+    if (!el || !isAwaiting() || el.classList.contains("ng-brushed")) return;
+    lastAngle = angle;
+    const a = (angle * Math.PI) / 180;
+    const [dx, dy] = [Math.sin(a), -Math.cos(a)];
+    const k = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
+    el.style.setProperty("--ng-angle", `${angle}deg`);
+    el.style.setProperty(
+      "--ng-from",
+      `${50 + (50 * dx) / k}% ${50 + (50 * dy) / k}%`,
+    );
+    el.style.setProperty(
+      "--ng-to",
+      `${50 - (50 * dx) / k}% ${50 - (50 * dy) / k}%`,
+    );
+    el.style.setProperty("--ng-dx", dx.toFixed(3));
+    el.style.setProperty("--ng-dy", dy.toFixed(3));
+    el.style.setProperty("--ng-brush-duration", `${duration}s`);
+    el.classList.add("ng-brushed");
+    // Should the rest never come (the worker stalled), they follow anyway.
+    backstop ||= window.setTimeout(() => {
+      panes.forEach((_, j) => brushPane(j, lastAngle, 1.6));
+    }, 8000);
+  }
+
   // All WebGL runs in the worker. Without OffscreenCanvas the CSS gradient
   // stays, so the main thread never pays for the effect.
   const canvas = document.querySelector<HTMLCanvasElement>(".aurora canvas");
@@ -235,12 +291,16 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           site: chosen,
           still: motion.matches,
           hidden: document.hidden,
+          targets: paneBoxes(),
         },
         [offscreen],
       );
       worker.onmessage = ({ data }: MessageEvent<WorkerMessage>) => {
         if (typeof data === "object") {
-          if ("pick" in data) {
+          if ("brush" in data) {
+            if (data.brush < 0) showAllPanes();
+            else brushPane(data.brush, data.angle ?? 135, data.duration ?? 1.6);
+          } else if ("pick" in data) {
             showPick(data.pick);
           } else if ("times" in data) {
             showSiteTimes(data.times, data.zone);
@@ -251,7 +311,10 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           return;
         }
         const on = data === "on";
-        if (!on) showPick(null);
+        if (!on) {
+          showPick(null);
+          showAllPanes();
+        }
         canvas.classList.toggle("on", on);
         if (info) info.hidden = !on;
       };
@@ -270,12 +333,16 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
               type: "size",
               width: canvas.clientWidth,
               height: canvas.clientHeight,
+              targets: paneBoxes(),
             }),
           150,
         );
       }).observe(canvas);
     }
-    if ("requestIdleCallback" in window) {
+    // The header and cards wait for the fly-in: start at once.
+    if (isAwaiting()) {
+      startWorker(canvas);
+    } else if ("requestIdleCallback" in window) {
       requestIdleCallback(() => startWorker(canvas), { timeout: 1500 });
     } else {
       setTimeout(() => startWorker(canvas), 200);

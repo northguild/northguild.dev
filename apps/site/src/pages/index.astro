@@ -50,9 +50,10 @@ const repos = [
     pointer-events: auto;
   }
 
-  /* The entrance (`.ng-enter-*`, Base.astro): the header leads, then the
-     title, the line under it, and the cards in turn, landing as the sky's own
-     fade-in (1.6s) finishes. */
+  /* Usually Huginn's fly-in draws these in as he reaches them (Aurora.astro).
+     Without it, the entrance (`.ng-enter-*`, Base.astro) plays: the header
+     leads, then the title, the line under it, and the cards in turn, landing
+     as the sky's own fade-in (1.6s) finishes. */
   h1 {
     --ng-delay: 0.25s;
   }

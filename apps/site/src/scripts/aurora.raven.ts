@@ -2,9 +2,16 @@
 // 3D world as the sky. Units: metres and seconds. World frame: x east, y up,
 // z north, the viewer's eye at the origin.
 //
-// Each flight is planned in the camera's frame so that it crosses the window:
-// usually a pass along a gentle curve 20 to 65 m away, sometimes a few lazy
-// circles farther out, low over the horizon where the aurora lights the sky. The bird is a small mesh posed every frame. It flaps in
+// The first flight is a fly-in: he comes in over the viewer's shoulder from
+// just past the top-left corner, close enough to fill a good part of the
+// screen, glides out over the page, swoops low to the bottom right and
+// leaves into the distance, a little differently every time. His flight
+// draws in the page's header, title and cards (see aurora.worker.ts).
+//
+// After that each flight is planned in the camera's frame so that it crosses
+// the window: usually a pass along a gentle curve 20 to 65 m away, sometimes
+// a few lazy circles farther out, low over the horizon where the aurora
+// lights the sky. The bird is a small mesh posed every frame. It flaps in
 // bouts at about 3.4 beats a second, the hand folding back on the upstroke,
 // and glides in between. It banks into its turns and now and then rolls onto
 // its back for a moment, as ravens do. Proportions follow the common raven:
@@ -27,18 +34,27 @@ export type RavenView = {
   /** The highest a flight's middle goes on screen (-1 bottom, 1 top): clear
    * of the page's cards. */
   ceiling: number;
+  /** The boxes a fly-in should pass behind, header first, on screen (-1 to
+   * 1, y up). Empty for a fly-in over the usual places. */
+  targets: ScreenBox[];
 };
 
+/** A box on screen: left, bottom, right, top, each -1 to 1, y up. */
+export type ScreenBox = [number, number, number, number];
+
 export type RavenTiming = {
-  /** Seconds before the first flight. */
-  first: [number, number];
+  /** Seconds before the fly-in, once the sky is up. */
+  entrance: [number, number];
   /** Seconds between flights. */
   gap: [number, number];
 };
 
-/** The first flight as the page opens, then a new one about 30 s after
- * each ends. */
-export const RAVEN_TIMING: RavenTiming = { first: [0.5, 1.5], gap: [27, 33] };
+/** The fly-in as the sky fades in, then a new flight 20 to 25 s after each
+ * ends. */
+export const RAVEN_TIMING: RavenTiming = {
+  entrance: [0.5, 0.8],
+  gap: [20, 25],
+};
 
 const G = 9.81;
 /** Metres over which the bird fades in at a flight's start and out at its
@@ -392,6 +408,13 @@ type Path = {
   length: number;
   /** Airspeed, m/s. */
   speed: number;
+  /** Airspeed at the start, reached up to `speed` over the first `launch`
+   * metres: the fly-in eases up to speed as he goes into the swoop. */
+  startSpeed: number;
+  launch: number;
+  /** Whether to fade in over the first FADE metres: not for a fly-in, which
+   * starts out of frame and close by. */
+  fadeIn: boolean;
   soar: boolean;
   /** Distance along the path at which to roll over, or -1 for none. */
   rollAt: number;
@@ -449,7 +472,23 @@ function curve(through: V[], speed: number, soar: boolean, roll: number): Path {
   }
   const length = dist[dist.length - 1]!;
   const rollAt = Math.random() < roll ? length * randomBetween(0.35, 0.6) : -1;
-  return { points, dist, length, speed, soar, rollAt };
+  return {
+    points,
+    dist,
+    length,
+    speed,
+    startSpeed: speed,
+    launch: 0,
+    fadeIn: true,
+    soar,
+    rollAt,
+  };
+}
+
+/** The airspeed a distance s along the path. */
+function speedAt(path: Path, s: number): number {
+  if (path.launch <= 0) return path.speed;
+  return lerpNumber(path.startSpeed, path.speed, smoothstep(s / path.launch));
 }
 
 /** Where along the path, by distance flown. */
@@ -505,12 +544,25 @@ function frame(view: RavenView) {
       Math.max(horizon + lo, Math.min(horizon + hi, view.ceiling)),
     );
   }
+  // The point at a depth (metres along the view) behind a point on screen.
+  function pointAtDepth(nx: number, ny: number, depth: number): V {
+    return addVectors(
+      scaleVector(fwd, depth),
+      addVectors(
+        scaleVector(right, nx * tanX * depth),
+        scaleVector(up, ny * view.tanY * depth),
+      ),
+    );
+  }
   return {
     right,
     up,
     fwd,
+    tanX,
+    horizon,
     isInFrame,
     rayThroughScreen,
+    pointAtDepth,
     randomHeightAboveHorizon,
   };
 }
@@ -539,8 +591,8 @@ function leave(p: V, d: V, isInFrame: (p: V) => boolean): V {
 }
 
 /** The point raised, if need be, to the least height above the ground. */
-function keepAboveGround(p: V, view: RavenView): V {
-  return [p[0], Math.max(p[1], GROUND - view.eye), p[2]];
+function keepAboveGround(p: V, view: RavenView, least = GROUND): V {
+  return [p[0], Math.max(p[1], least - view.eye), p[2]];
 }
 
 /** A pass across the view along a gentle curve. */
@@ -603,6 +655,28 @@ function pass(view: RavenView): Path | null {
   return spare;
 }
 
+/** Points every 30 degrees round a level circle, for so many turns, climbing
+ * by `climb` metres a turn: x is r cos a and z is r sin a, from angle `start`,
+ * turning one way or the other by `sense`. */
+function ringAround(
+  centre: V,
+  r: number,
+  turns: number,
+  sense: number,
+  climb: number,
+  start: number,
+): V[] {
+  const steps = Math.ceil(turns * 12);
+  return Array.from({ length: steps + 1 }, (_, k): V => {
+    const a = start + (sense * k * Math.PI) / 6;
+    return addVectors(centre, [
+      r * Math.cos(a),
+      (climb * k) / 12,
+      r * Math.sin(a),
+    ]);
+  });
+}
+
 /** A few slow circles on still air, then away. */
 function circles(view: RavenView): Path | null {
   const { isInFrame, rayThroughScreen, randomHeightAboveHorizon } = frame(view);
@@ -619,18 +693,8 @@ function circles(view: RavenView): Path | null {
     const sense = Math.random() < 0.5 ? -1 : 1;
     const climb = randomBetween(-4, 4);
     const start = randomBetween(0, 2 * Math.PI);
-    const steps = Math.ceil(turns * 12);
-    const ring: V[] = [];
-    for (let k = 0; k <= steps; k++) {
-      const a = start + (sense * k * Math.PI) / 6;
-      ring.push(
-        addVectors(centre, [
-          r * Math.cos(a),
-          (climb * k) / 12,
-          r * Math.sin(a),
-        ]),
-      );
-    }
+    const ring = ringAround(centre, r, turns, sense, climb, start);
+    const steps = ring.length - 1;
     if (!ring.every((p) => skyward(p, view) && isInFrame(p, 0.95))) continue;
     // Join and leave the circle where the tangent leaves the frame soonest,
     // within its first and last turn, keeping at least three quarters of a
@@ -679,6 +743,221 @@ function circles(view: RavenView): Path | null {
   return null;
 }
 
+/** The least height of a fly-in, metres above the ground or sea: he skims
+ * low over the water as he dives past the cards. */
+const LOW = 0.5;
+
+/** Where the header and cards usually sit on screen, for a fly-in with none
+ * given (after switching sky, when the cards are already up). */
+const USUAL_TARGETS: ScreenBox[] = [
+  [-1, 0.84, 1, 1],
+  [-0.62, -0.25, 0.62, 0.35],
+];
+
+/** The variations on a fly-in: a plain swoop, a roll while he is still
+ * close, a steeper and lower dive, a few wide circles in the distance, or an
+ * S-bend on the way down. */
+type Flourish = "swoop" | "roll" | "stoop" | "spiral" | "weave";
+const FLOURISHES: Flourish[] = ["swoop", "roll", "stoop", "spiral", "weave"];
+
+/** Which way a fly-in leaves after the swoop: circling back to the left
+ * into the distance, on into the background more or less straight ahead,
+ * or off to the right. */
+type Exit = "left" | "away" | "right";
+const EXITS: Exit[] = ["left", "away", "right"];
+
+/** For each way out: where on screen (x, -1 to 1) he turns and where he
+ * heads, and how far off that is (metres; nearer on a tall screen, where he
+ * is close as he comes out of the swoop). Off to the right he heads out of
+ * frame. */
+const EXIT_SHAPES: Record<
+  Exit,
+  {
+    turnX: [number, number];
+    farX: [number, number];
+    depth: [number, number];
+    tallDepth: [number, number];
+  }
+> = {
+  left: {
+    turnX: [0.5, 0.85],
+    farX: [-0.7, -0.25],
+    depth: [70, 110],
+    tallDepth: [45, 70],
+  },
+  away: {
+    turnX: [0.3, 0.55],
+    farX: [-0.15, 0.3],
+    depth: [90, 130],
+    tallDepth: [55, 80],
+  },
+  right: {
+    turnX: [0.75, 0.95],
+    farX: [1.15, 1.4],
+    depth: [35, 55],
+    tallDepth: [18, 30],
+  },
+};
+
+/** The point moved to one side of the line from a to b (sideways and level),
+ * by k times the line's length. */
+function besideLine(p: V, a: V, b: V, k: number): V {
+  const d = subtractVectors(b, a);
+  const aside = normalize([-d[2], 0, d[0]]);
+  return addVectors(p, scaleVector(aside, k * Math.hypot(...d)));
+}
+
+/** The fly-in: from just past the top-left corner, close enough to fill a
+ * good part of the screen, a long swoop down past the header and cards to
+ * low over the water at the bottom right, then away: circling back to the
+ * left, on into the background, or off to the right. */
+function entrance(view: RavenView): Path {
+  const { fwd, tanX, horizon, isInFrame, pointAtDepth } = frame(view);
+  const boxes = view.targets.length ? view.targets : USUAL_TARGETS;
+  const card = boxes[1] ?? USUAL_TARGETS[1]!;
+  const flourish = FLOURISHES[Math.floor(Math.random() * FLOURISHES.length)]!;
+  const stoop = flourish === "stoop";
+  const side = Math.random() < 0.5 ? -1 : 1;
+
+  // A point at a depth behind a point on screen, brought nearer if need be
+  // so that it stays above the water (below the horizon a far point would
+  // be under it), but no nearer than `least`: past that it is raised.
+  function lowPoint(nx: number, ny: number, depth: number, least = 4): V {
+    const slope = pointAtDepth(nx, ny, 1)[1];
+    const floor = LOW - view.eye;
+    const most = slope < 0 && floor < 0 ? floor / slope : Infinity;
+    return keepAboveGround(
+      pointAtDepth(nx, ny, Math.min(depth, Math.max(most, least))),
+      view,
+      LOW,
+    );
+  }
+
+  // In over the viewer's shoulder, overtaking him: just past the top-left
+  // corner and so close that the wings (reaching 0.6 m from his middle)
+  // start out of frame too, flying mostly away so that he grows out of the
+  // corner and draws off smoothly rather than darting across.
+  const near = randomBetween(1.3, 1.6);
+  const start = pointAtDepth(
+    -(1 + 0.75 / (near * tanX)) * randomBetween(1, 1.08),
+    (1 + 0.75 / (near * view.tanY)) * randomBetween(0.9, 1),
+    near,
+  );
+  // One long, straight-ish glide out over the title to above the first
+  // card, a few powerful wingbeats carrying him.
+  const [x0, y0, x1, y1] = card;
+  const glide = lowPoint(
+    lerpNumber(x0, x1, randomBetween(0.35, 0.75)),
+    lerpNumber(y0, y1, randomBetween(0.55, 0.95)),
+    randomBetween(7, 10),
+  );
+  // Then the long swoop: down past the cards and low over the water toward
+  // the bottom-right corner. On a wide screen the horizon is near the
+  // bottom, so he stays just above it; on a tall one the cards are over
+  // the water and he comes down close, skimming it, to pass below them.
+  const tall = horizon > -0.3;
+  const lowY = Math.max(-0.92, randomBetween(-0.88, -0.6) - (stoop ? 0.08 : 0));
+  const low = lowPoint(
+    randomBetween(0.35, 0.75),
+    tall ? lowY : Math.max(lowY, horizon + 0.04),
+    randomBetween(14, 20) * (stoop ? 0.75 : 1),
+    // Always on away from the viewer, never back toward him.
+    dotProduct(glide, fwd) + 3,
+  );
+  // Then out of the swoop, still low, banking the way he leaves...
+  const exit = EXITS[Math.floor(Math.random() * EXITS.length)]!;
+  const shape = EXIT_SHAPES[exit];
+  const turning = lowPoint(
+    randomBetween(...shape.turnX),
+    (tall ? lowY : Math.max(lowY, horizon + 0.04)) + randomBetween(0.05, 0.15),
+    // On a tall screen he is close down there; a nearer turn keeps him
+    // from shooting up toward the horizon as he draws away.
+    tall ? randomBetween(7, 11) : randomBetween(22, 32),
+    dotProduct(low, fwd) + 3,
+  );
+  // ...and on into the distance, rising only as the distance lifts him
+  // toward the horizon, against the sky above the skyline.
+  function distantPoint(): V {
+    let p: V = [0, 0, 0];
+    for (let tries = 0; tries < 10; tries++) {
+      p = pointAtDepth(
+        randomBetween(...shape.farX),
+        Math.min(0.6, horizon + randomBetween(0.08, 0.2) + tries * 0.05),
+        randomBetween(...(tall ? shape.tallDepth : shape.depth)),
+      );
+      if (skyward(p, view)) return p;
+    }
+    return keepAboveGround(p, view);
+  }
+  const far = distantPoint();
+
+  const through: V[] = [start, glide];
+  if (flourish === "weave") {
+    through.push(
+      besideLine(lerpVectors(glide, low, 0.5), glide, low, side * 0.2),
+    );
+  }
+  through.push(low, turning, far);
+
+  const flat = normalize([far[0] - turning[0], 0, far[2] - turning[2]]);
+  // A few wide circles around a centre beside the distant point, joined
+  // where he arrives there and turning the way he is going.
+  function spiral(): V[] | null {
+    const r = randomBetween(10, 16);
+    const centre = besideLine(far, [0, 0, 0], flat, side * r);
+    const a0 = Math.atan2(far[2] - centre[2], far[0] - centre[0]);
+    const tangent: V = [-Math.sin(a0), 0, Math.cos(a0)];
+    const sense = dotProduct(tangent, flat) >= 0 ? 1 : -1;
+    const ring = ringAround(
+      centre,
+      r,
+      randomBetween(1, 1.75),
+      sense,
+      randomBetween(2, 5),
+      a0,
+    ).slice(1);
+    return ring.every((p) => skyward(p, view) && isInFrame(p, 0.98))
+      ? ring
+      : null;
+  }
+  const ring = flourish === "spiral" ? spiral() : null;
+  if (ring) {
+    through.push(...ring);
+  } else {
+    // Gliding on the way he is going, a little higher.
+    through.push(
+      addVectors(
+        far,
+        addVectors(scaleVector(flat, randomBetween(25, 35)), [
+          0,
+          randomBetween(1, 3),
+          0,
+        ]),
+      ),
+    );
+  }
+  const last = through[through.length - 1]!;
+  const before = through[through.length - 2]!;
+  through.push(
+    keepAboveGround(
+      leave(last, normalize(subtractVectors(last, before)), isInFrame),
+      view,
+    ),
+  );
+
+  // An easy glide, gathering a little speed as he goes down into the swoop.
+  const path = curve(through, randomBetween(8, 9), false, 0);
+  path.startSpeed = randomBetween(6.5, 7);
+  path.launch = 15;
+  path.fadeIn = false;
+  // The roll comes early in the swoop, while he is still near.
+  if (flourish === "roll") {
+    path.rollAt =
+      Math.hypot(...subtractVectors(glide, start)) + randomBetween(2, 5);
+  }
+  return path;
+}
+
 // ---------------------------------------------------------------------------
 
 export type Raven = {
@@ -688,6 +967,12 @@ export type Raven = {
   /** Land: no bird until the next flight is due, after `wait` seconds (a
    * fresh gap if not given). */
   reset(wait?: number): void;
+  /** Land, and make the next flight a fly-in, after `wait` seconds. */
+  enter(wait: number): void;
+  /** Whether the flight under way is a fly-in. */
+  entering: boolean;
+  /** Where the bird is, in world space. */
+  position: V;
   /** The bird's triangles in world space (RAVEN_STRIDE floats a vertex). */
   mesh: Float32Array;
   /** Vertices to draw, 0 when there is no bird. */
@@ -698,7 +983,8 @@ export type Raven = {
 
 export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
   const mesh = new Float32Array(TRIS * 3 * RAVEN_STRIDE);
-  let wait = randomBetween(...timing.first);
+  let wait = randomBetween(...timing.entrance);
+  let flyIn = true;
   let path: Path | null = null;
   let s = 0;
   let size = 1;
@@ -719,20 +1005,36 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
     mesh,
     count: 0,
     alpha: 0,
+    entering: false,
+    position: [0, 0, 0],
     reset(next) {
       path = null;
       bird.count = 0;
+      bird.entering = false;
       wait = next ?? randomBetween(...timing.gap);
+    },
+    enter(next) {
+      bird.reset(next);
+      flyIn = true;
     },
     step(dt, view) {
       if (!path) {
         wait -= dt;
         if (wait > 0) return;
-        path = Math.random() < 0.3 ? circles(view) : pass(view);
-        if (!path) return bird.reset();
+        path = flyIn
+          ? entrance(view)
+          : Math.random() < 0.3
+            ? circles(view)
+            : pass(view);
+        // No flight fits this view: try again shortly rather than leave the
+        // sky empty for a whole gap.
+        if (!path) return bird.reset(randomBetween(1, 2));
+        bird.entering = flyIn;
+        flyIn = false;
         s = 0;
         size = randomBetween(0.94, 1.08);
-        rate = randomBetween(3.2, 3.6);
+        // Slower, deeper wingbeats on the fly-in.
+        rate = bird.entering ? randomBetween(2.7, 3) : randomBetween(3.2, 3.6);
         phase = LEVEL_PHASE;
         flap = flapTarget = path.soar ? 0 : 1;
         wantFlap = !path.soar;
@@ -741,9 +1043,12 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
         rollT = -1;
         up = null;
       }
-      s += path.speed * dt;
+      const speed = speedAt(path, s);
+      s += speed * dt;
       if (s >= path.length) return bird.reset();
-      bird.alpha = smoothstep(s / FADE) * smoothstep((path.length - s) / FADE);
+      bird.alpha =
+        (path.fadeIn ? smoothstep(s / FADE) : 1) *
+        smoothstep((path.length - s) / FADE);
 
       // Heading and bank. The lift must carry the bird's weight and turn it,
       // so it leans along gravity plus the turn's acceleration (a coordinated
@@ -752,8 +1057,9 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
       const p = along(path, s);
       const ahead = along(path, s + ds);
       const behind = along(path, s - ds);
+      bird.position = p;
       const fwd = normalize(subtractVectors(ahead, behind));
-      const k = (path.speed / ds) ** 2;
+      const k = (speed / ds) ** 2;
       const accel = scaleVector(
         subtractVectors(addVectors(ahead, behind), scaleVector(p, 2)),
         k,
@@ -799,9 +1105,13 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
             ? wantFlap
               ? randomBetween(0.6, 1.2)
               : randomBetween(5, 10)
-            : wantFlap
-              ? randomBetween(1, 2.6)
-              : randomBetween(0.7, 2.2);
+            : bird.entering
+              ? wantFlap
+                ? randomBetween(0.8, 1.5)
+                : randomBetween(2, 4)
+              : wantFlap
+                ? randomBetween(1, 2.6)
+                : randomBetween(0.7, 2.2);
         }
       }
       let flapping = wantFlap && !rolling;

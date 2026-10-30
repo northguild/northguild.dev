@@ -35,6 +35,27 @@ const {
       type="font/woff2"
       crossorigin
     />
+    {
+      entrance && (
+        <script is:inline>
+          // Huginn's fly-in paints the header and cards in as he passes
+          // (Aurora.astro); they wait for him, hidden. Only where the sky can
+          // run with motion, and never for more than 4 s: if he has not
+          // passed the first by then, the usual entrance plays.
+          if (
+            !matchMedia("(prefers-reduced-motion: reduce)").matches &&
+            "transferControlToOffscreen" in HTMLCanvasElement.prototype
+          ) {
+            document.documentElement.classList.add("ng-await");
+            setTimeout(function showIfHuginnIsLate() {
+              if (!document.querySelector(".ng-brushed")) {
+                document.documentElement.classList.remove("ng-await");
+              }
+            }, 4000);
+          }
+        </script>
+      )
+    }
   </head>
   <body>
     <Header entrance={entrance} />
@@ -156,6 +177,86 @@ const {
     100% {
       mask-image: var(--ng-sweep);
       mask-position: 0% 0;
+      filter: blur(0);
+    }
+  }
+
+  /* ---- Huginn's wake ----
+   * On the home page the header, title, intro and cards wait, hidden, for
+   * the fly-in
+   * (`ng-await`, set in the head). As Huginn passes each one the page adds
+   * `ng-brushed` with his heading: the same aurora light sweeps across it in
+   * the direction he flies (`--ng-angle`, from `--ng-from` to `--ng-to`),
+   * paced to him (`--ng-brush-duration`), and the pane drifts a few pixels
+   * along his line into place, as if his wings brushed it there.
+   *
+   * The mask is three times the pane's size, so the sweep's edge enters the
+   * pane a quarter of the way through and leaves it at three quarters: at a
+   * steady pace it trails just behind him as he crosses. */
+  html.ng-await :is(.ng-enter-pane, .ng-enter-text):not(.ng-brushed) {
+    animation-name: none;
+    opacity: 0;
+  }
+  :is(.ng-enter-pane, .ng-enter-text).ng-brushed {
+    --ng-sweep: linear-gradient(
+      var(--ng-angle, 135deg),
+      #000 38%,
+      transparent 62%
+    );
+    mask-size: 300% 300%;
+    mask-repeat: no-repeat;
+    animation-duration: var(--ng-brush-duration, 1.6s);
+    animation-timing-function: linear;
+    animation-delay: 0s;
+  }
+  .ng-enter-pane.ng-brushed {
+    animation-name: ng-brush-pane;
+  }
+  .ng-enter-text.ng-brushed {
+    animation-name: ng-brush-text;
+  }
+  @keyframes ng-brush-text {
+    0% {
+      mask-image: var(--ng-sweep);
+      mask-position: var(--ng-from, 100% 100%);
+      translate: calc(var(--ng-dx, 0.7) * -10px) calc(var(--ng-dy, 0.7) * -10px);
+      filter: blur(12px);
+      color: var(--ng-aurora);
+      text-shadow: 0 0 24px color(from var(--ng-aurora) srgb r g b / 0.7);
+      box-shadow: 0 0 48px 32px transparent;
+    }
+    45% {
+      filter: blur(3px);
+      color: var(--ng-aurora);
+      text-shadow: 0 0 18px color(from var(--ng-aurora) srgb r g b / 0.45);
+    }
+    100% {
+      mask-image: var(--ng-sweep);
+      mask-position: var(--ng-to, 0% 0%);
+      translate: 0 0;
+      filter: blur(0);
+      text-shadow: 0 0 0 transparent;
+      box-shadow: 0 0 48px 32px transparent;
+    }
+  }
+  @keyframes ng-brush-pane {
+    0% {
+      mask-image: var(--ng-sweep);
+      mask-position: var(--ng-from, 100% 100%);
+      translate: calc(var(--ng-dx, 0.7) * -10px) calc(var(--ng-dy, 0.7) * -10px);
+      filter: blur(10px);
+      border-color: color(from var(--ng-aurora) srgb r g b / 0.7);
+      box-shadow: 0 0 44px -4px color(from var(--ng-aurora) srgb r g b / 0.5);
+    }
+    45% {
+      filter: blur(2px);
+      border-color: color(from var(--ng-aurora) srgb r g b / 0.45);
+      box-shadow: 0 0 32px -6px color(from var(--ng-aurora) srgb r g b / 0.3);
+    }
+    100% {
+      mask-image: var(--ng-sweep);
+      mask-position: var(--ng-to, 0% 0%);
+      translate: 0 0;
       filter: blur(0);
     }
   }
