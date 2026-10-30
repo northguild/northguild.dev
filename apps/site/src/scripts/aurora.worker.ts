@@ -31,7 +31,12 @@ import {
 import { getSystemTimeZone, getUnixNow } from "@northguild/gmt";
 import { SUN_UP, lookAhead, type Seer, type SiteTimes } from "./aurora.ahead";
 import { MOON } from "./aurora.moon";
-import { RAVEN_STRIDE, RAVEN_TIMING, raven } from "./aurora.raven";
+import {
+  RAVEN_STRIDE,
+  RAVEN_TIMING,
+  raven,
+  type ScreenBox,
+} from "./aurora.raven";
 import { SITES, type Site } from "./aurora.sites";
 import {
   PLANETS,
@@ -46,13 +51,15 @@ import { SKYLINE as HELSINKI } from "./skylines/helsinki";
 import { SKYLINE as ISAFJORDUR } from "./skylines/isafjordur";
 
 const FRAME_MS = 1000 / 30;
+/** During the fly-in, when he is close and crossing the screen fast. */
+const FLY_IN_FRAME_MS = 1000 / 60;
 const BASE_SCALE = 0.6;
 const MAX_EDGE = 1280;
 const SPARKS = 4000;
 const RAD = Math.PI / 180;
 /** The raven's own texture, square: big enough that scaling it down to the
  * bird's size on screen smooths its edges. */
-const RAVEN_TEX = 256;
+const RAVEN_TEX = 512;
 
 // Wall-clock epoch milliseconds from Temporal (via gmt): the stars, planets,
 // moon and sun need the real time. Frame timing uses rAF stamps, not the wall
@@ -82,9 +89,13 @@ export type AuroraMessage =
       site: number;
       still: boolean;
       hidden: boolean;
+      /** The page's header, cards, title and intro, to draw in as the
+       * fly-in reaches them, in CSS pixels: left, top, width, height. Later
+       * fly-ins aim at them too. Empty when the page draws them in itself. */
+      targets: PageBox[];
     }
   | { type: "site"; site: number }
-  | { type: "size"; width: number; height: number }
+  | { type: "size"; width: number; height: number; targets: PageBox[] }
   | { type: "still"; still: boolean }
   | { type: "hidden"; hidden: boolean }
   /** What is drawn near this point (CSS pixels), within reach pixels. */
@@ -94,6 +105,9 @@ export type AuroraMessage =
   /** Whether the page wants the sun and moon times (the popover is open or
    * about to be). */
   | { type: "times"; want: boolean };
+
+/** A box on the page in CSS pixels: left, top, width, height. */
+export type PageBox = [number, number, number, number];
 
 /** One unbroken run of a constellation line in CSS pixels, [x, y, x, y, …],
  * drawn from the end nearer the hovered star; step counts lines out from it. */
@@ -126,6 +140,10 @@ export type WorkerMessage =
   | "off"
   | { site: number }
   | { pick: SkyLabel | null }
+  /** Paint in the page's box `brush` (an index into the init's targets) now,
+   * sweeping toward `angle` (a CSS gradient angle) over `duration` seconds;
+   * -1 paints them all in, as there will be no fly-in. */
+  | { brush: number; angle?: number; duration?: number }
   /** When the sun and moon next show in this window, per site in SITES order. */
   | { times: SiteTimes[]; zone: string };
 
@@ -634,7 +652,135 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       // Landscape: below the middle of the cards. Portrait: the cards sit
       // below the horizon, so up toward the top of the frame.
       ceiling: 0.3 + 0.55 * portrait,
+      // Where the page's boxes are, for every fly-in, so the one after a
+      // sky switch flies the same line as the first.
+      targets: targets.map(onScreen),
     };
+  }
+
+  // The page's header, title, intro and cards, hidden until the fly-in
+  // reaches them: his flight draws each one in. As he reaches a box the page
+  // starts a sweep across it the way he is flying, paced so its edge
+  // follows just behind him (it enters the box a quarter of the way into
+  // the sweep and crosses it in the middle half; see Base.astro). A box he
+  // never reaches is drawn in once he is past its middle on his way down
+  // the screen (top left to bottom right), or soon after the last one.
+  let targets: PageBox[] = init.targets;
+  let painted = targets.map(() => false);
+  let seen: [number, number] | null = null;
+  let heading: [number, number] = [Math.SQRT1_2, Math.SQRT1_2];
+  // His speed across the screen, CSS pixels a second, and the seconds since
+  // a box was last drawn in.
+  let pace = 0;
+  let sincePaint = 0;
+  /** A page box on screen, -1 to 1 with y up, as the raven plans in. */
+  function onScreen([x, y, w, h]: PageBox): ScreenBox {
+    const [W, H] = [width || 1, height || 1];
+    return [
+      (2 * x) / W - 1,
+      1 - (2 * (y + h)) / H,
+      (2 * (x + w)) / W - 1,
+      1 - (2 * y) / H,
+    ];
+  }
+  /** The box's corners along the heading: the nearest, and how far across. */
+  function spanAlongHeading([x, y, w, h]: PageBox): [number, number] {
+    const along = [
+      [x, y],
+      [x + w, y],
+      [x, y + h],
+      [x + w, y + h],
+    ].map(([cx, cy]) => cx! * heading[0] + cy! * heading[1]);
+    const lead = Math.min(...along);
+    return [lead, Math.max(...along) - lead];
+  }
+  function paint(i: number): void {
+    const [, span] = spanAlongHeading(targets[i]!);
+    painted[i] = true;
+    sincePaint = 0;
+    scope.postMessage({
+      brush: i,
+      angle: Math.round(
+        (Math.atan2(heading[0], -heading[1]) / RAD + 360) % 360,
+      ),
+      // The sweep's edge crosses the box in the middle half of the sweep,
+      // a little slower than he is going now: he slows on screen as he
+      // draws away, and the edge should never overtake him.
+      duration:
+        Math.round(
+          Math.min(5, Math.max(1.6, (2 * span) / (0.7 * pace || 1))) * 100,
+        ) / 100,
+    });
+  }
+  function paintTheRest(): void {
+    painted.forEach((done, i) => {
+      if (!done) paint(i);
+    });
+  }
+  function paintInWake(dt: number): void {
+    if (!painted.includes(false)) return;
+    if (!bird.entering) {
+      // The fly-in is over and he never passed some: paint them now.
+      if (seen) paintTheRest();
+      return;
+    }
+    const at = project({ cam, tanY }, width, height, bird.position);
+    if (!at) return;
+    if (seen) {
+      const [dx, dy] = [at[0] - seen[0], at[1] - seen[1]];
+      const moved = Math.hypot(dx, dy);
+      if (moved > 0.5 && dt > 0) {
+        // Smoothed, so a wobble in the curve does not swing the wave.
+        const hx = heading[0] * 0.6 + (dx / moved) * 0.4;
+        const hy = heading[1] * 0.6 + (dy / moved) * 0.4;
+        const n = Math.hypot(hx, hy) || 1;
+        heading = [hx / n, hy / n];
+        pace = moved / dt;
+      }
+    }
+    seen = at;
+    const [bx0, by0, bx1, by1] = birdOnPage();
+    targets.forEach((box, i) => {
+      if (painted[i]) return;
+      const [x, y, w, h] = box;
+      // His body reaching it, not just a wing tip: his middle within a
+      // quarter of his size of the box. The header, a thin strip across the
+      // top, he sweeps with a wing as he comes in: any of him will do.
+      const [mx, my] =
+        i === 0
+          ? [(bx1 - bx0) / 2, (by1 - by0) / 2]
+          : [(bx1 - bx0) / 4, (by1 - by0) / 4];
+      const over =
+        at[0] > x - mx &&
+        at[0] < x + w + mx &&
+        at[1] > y - my &&
+        at[1] < y + h + my;
+      // Along the screen's diagonal, which his swoop follows overall; his
+      // heading at the moment can swing back as he turns.
+      const [W, H] = [width || 1, height || 1];
+      const past = at[0] * W + at[1] * H >= (x + w / 2) * W + (y + h / 2) * H;
+      if (over || past) paint(i);
+      // One his path never reaches (a card below his swoop on a phone)
+      // follows on soon after the last, while he is clear of it.
+      else if (sincePaint > 1.1 && painted.includes(true)) paint(i);
+    });
+    sincePaint += dt;
+  }
+  /** The bird's extent on the page in CSS pixels: left, top, right, bottom. */
+  function birdOnPage(): [number, number, number, number] {
+    const m = bird.mesh;
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < bird.count * RAVEN_STRIDE; i += RAVEN_STRIDE) {
+      const xy = project({ cam, tanY }, width, height, [
+        m[i]!,
+        m[i + 1]!,
+        m[i + 2]!,
+      ]);
+      if (!xy) continue;
+      [x0, x1] = [Math.min(x0, xy[0]), Math.max(x1, xy[0])];
+      [y0, y1] = [Math.min(y0, xy[1]), Math.max(y1, xy[1])];
+    }
+    return [x0, y0, x1, y1];
   }
   function moveToSite(index: number): void {
     site = SITES[index] ?? SITES[0]!;
@@ -1126,14 +1272,27 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     }
   }
 
+  // Whether the fly-in can run at 60 fps here, and the time between its
+  // frames lately (ms).
+  let smooth = true;
+  let paceMs = FLY_IN_FRAME_MS;
   function onFrame(stamp: number): void {
     raf = nextFrame(onFrame);
     const elapsed = stamp - last;
-    if (elapsed < FRAME_MS - 2) return;
+    // The fly-in at 60 fps while he is close and crossing the screen fast,
+    // and only while frames keep up: an uneven 60 looks worse than a steady
+    // 30.
+    const fast = bird.entering && smooth && Math.hypot(...bird.position) < 15;
+    if (elapsed < (fast ? FLY_IN_FRAME_MS : FRAME_MS) - 2) return;
+    if (fast && last && elapsed < 200) {
+      paceMs = paceMs * 0.9 + elapsed * 0.1;
+      if (paceMs > 22) smooth = false;
+    }
     if (last) {
       const dt = Math.min(elapsed, 100) / 1000;
       t += dt;
       bird.step(dt, currentRavenView());
+      paintInWake(dt);
       adaptQuality(elapsed);
     }
     last = stamp;
@@ -1150,6 +1309,11 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   resizeCanvas();
   drawFrame();
   scope.postMessage("on");
+  // No raven to draw, or no motion: the page paints its boxes in itself.
+  if (targets.length && (!ravenOk || still)) {
+    painted = painted.map(() => true);
+    scope.postMessage({ brush: -1 });
+  }
   startLoop();
 
   // Stars arrive after the first frame so they never delay it, then the star
@@ -1184,7 +1348,11 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (level > 2) return;
     if (data.type === "site") {
       held = NOTHING;
-      bird.reset();
+      // Anything not yet painted in comes in now; the new sky gets its own
+      // fly-in once it is up.
+      paintTheRest();
+      if (still) bird.reset();
+      else bird.enter(1);
       moveToSite(data.site);
       skyAt = readWallClock();
       now = sky(site, skyAt);
@@ -1194,6 +1362,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     } else if (data.type === "size") {
       width = data.width;
       height = data.height;
+      if (data.targets.length === targets.length) targets = data.targets;
       resizeCanvas();
       drawFrame();
       followHeld();
