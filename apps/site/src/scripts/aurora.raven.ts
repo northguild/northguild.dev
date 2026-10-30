@@ -49,11 +49,11 @@ export type RavenTiming = {
   gap: [number, number];
 };
 
-/** The fly-in as the sky fades in, then a new flight 20 to 25 s after each
+/** The fly-in as the sky fades in, then a new flight 15 to 20 s after each
  * ends. */
 export const RAVEN_TIMING: RavenTiming = {
   entrance: [0.5, 0.8],
-  gap: [20, 25],
+  gap: [15, 20],
 };
 
 const G = 9.81;
@@ -408,10 +408,13 @@ type Path = {
   length: number;
   /** Airspeed, m/s. */
   speed: number;
-  /** Airspeed at the start, reached up to `speed` over the first `launch`
-   * metres: the fly-in eases up to speed as he goes into the swoop. */
-  startSpeed: number;
-  launch: number;
+  /** For a flown path (see fly()), the speed at each point; null for
+   * `speed` all the way. */
+  speeds: number[] | null;
+  /** Slow motion near the viewer, as wildlife film does it: time runs
+   * slower the nearer he is (see timeScaleAt), so up close he is big and
+   * unhurried and his speed across the screen stays calm. */
+  slowNear: boolean;
   /** Whether to fade in over the first FADE metres: not for a fly-in, which
    * starts out of frame and close by. */
   fadeIn: boolean;
@@ -477,8 +480,8 @@ function curve(through: V[], speed: number, soar: boolean, roll: number): Path {
     dist,
     length,
     speed,
-    startSpeed: speed,
-    launch: 0,
+    speeds: null,
+    slowNear: false,
     fadeIn: true,
     soar,
     rollAt,
@@ -487,22 +490,43 @@ function curve(through: V[], speed: number, soar: boolean, roll: number): Path {
 
 /** The airspeed a distance s along the path. */
 function speedAt(path: Path, s: number): number {
-  if (path.launch <= 0) return path.speed;
-  return lerpNumber(path.startSpeed, path.speed, smoothstep(s / path.launch));
+  const { speeds, dist } = path;
+  if (!speeds) return path.speed;
+  const [lo, hi, k] = bracket(path, s);
+  return lerpNumber(speeds[lo]!, speeds[hi]!, dist[hi] === dist[lo] ? 0 : k);
 }
 
-/** Where along the path, by distance flown. */
-function along(path: Path, s: number): V {
-  const { points, dist } = path;
+/** Within NEAR_SLOW metres time runs slower, in step with his distance,
+ * down to NEAR_SLOWEST of real time (at 3 m). */
+const NEAR_SLOW = 12;
+const NEAR_SLOWEST = 0.25;
+
+/** How fast time runs for him a distance s along the path. */
+function timeScaleAt(path: Path, s: number): number {
+  if (!path.slowNear) return 1;
+  const d = Math.hypot(...along(path, s));
+  return Math.min(1, Math.max(NEAR_SLOWEST, d / NEAR_SLOW));
+}
+
+/** The two points either side of a distance along the path, and how far
+ * between them it is. */
+function bracket(path: Path, s: number): [number, number, number] {
+  const { dist } = path;
   const c = Math.min(Math.max(s, 0), path.length);
   let [lo, hi] = [0, dist.length - 1];
-  while (hi - lo > 1) {
+  for (let step = 0; step < 32 && hi - lo > 1; step++) {
     const mid = (lo + hi) >> 1;
     if (dist[mid]! <= c) lo = mid;
     else hi = mid;
   }
   const span = dist[hi]! - dist[lo]! || 1;
-  return lerpVectors(points[lo]!, points[hi]!, (c - dist[lo]!) / span);
+  return [lo, hi, (c - dist[lo]!) / span];
+}
+
+/** Where along the path, by distance flown. */
+function along(path: Path, s: number): V {
+  const [lo, hi, k] = bracket(path, s);
+  return lerpVectors(path.points[lo]!, path.points[hi]!, k);
 }
 
 /** The view's axes, and whether a point is within the frame (with a margin). */
@@ -588,6 +612,85 @@ function leave(p: V, d: V, isInFrame: (p: V) => boolean): V {
     if (!isInFrame(q)) return addVectors(q, scaleVector(d, 6));
   }
   return addVectors(p, scaleVector(d, 100));
+}
+
+/** Degrees either side of a bearing over which the skyline is taken at its
+ * highest, so that a path kept clear of it does not follow every notch. */
+const SKYLINE_SPREAD = 4;
+/** How far above the skyline a path keeps (rad): seen against the sky, never
+ * in front of the mountains (Ísafjörður's fill the left of its view). */
+const SKYLINE_CLEARANCE = 2.5 * RAD;
+
+/** The highest the skyline stands within SKYLINE_SPREAD of a bearing
+ * (degrees), radians above the horizontal. */
+function skylineNear(view: RavenView, az: number): number {
+  let top = -Math.PI / 2;
+  for (let d = -SKYLINE_SPREAD; d <= SKYLINE_SPREAD; d++) {
+    top = Math.max(top, view.ridge(az + d));
+  }
+  return top;
+}
+
+/** The point raised, if need be, so that it is seen against the sky clear
+ * of the skyline. (Every ridge is far beyond his flights, so he is never
+ * behind one, only ever in front.) */
+function clearOfSkyline(p: V, view: RavenView, extra = 0): V {
+  const flat = Math.hypot(p[0], p[2]);
+  if (flat < 0.5) return p;
+  const az = Math.atan2(p[0], p[2]) / RAD;
+  const least =
+    flat * Math.tan(skylineNear(view, az) + SKYLINE_CLEARANCE + extra * RAD);
+  return p[1] >= least ? p : [p[0], least, p[2]];
+}
+
+/** Metres either side over which a lift clear of the skyline is eased. */
+const LIFT_EASE = 4;
+
+/** The path with every point kept clear of the skyline. */
+function keptClearOfSkyline(path: Path, view: RavenView): Path {
+  // How far each point must rise, then eased along the path (the most
+  // within a few metres either side, then averaged) so that lifting him
+  // clear never puts a kink in his line.
+  const rise = path.points.map((p) => clearOfSkyline(p, view)[1] - p[1]);
+  if (!rise.some((r) => r > 0)) return path;
+  function near(i: number, f: (j: number) => void): void {
+    const { dist } = path;
+    for (let j = i; j >= 0 && dist[i]! - dist[j]! <= LIFT_EASE; j--) f(j);
+    for (
+      let j = i + 1;
+      j < rise.length && dist[j]! - dist[i]! <= LIFT_EASE;
+      j++
+    ) {
+      f(j);
+    }
+  }
+  const most = rise.map((_, i) => {
+    let m = 0;
+    near(i, (j) => (m = Math.max(m, rise[j]!)));
+    return m;
+  });
+  const points = path.points.map((p, i): V => {
+    let [sum, n] = [0, 0];
+    near(i, (j) => {
+      sum += most[j]!;
+      n++;
+    });
+    return [p[0], p[1] + Math.max(rise[i]!, sum / n), p[2]];
+  });
+  const dist = [0];
+  for (let i = 1; i < points.length; i++) {
+    dist.push(
+      dist[i - 1]! + Math.hypot(...subtractVectors(points[i]!, points[i - 1]!)),
+    );
+  }
+  const length = dist[dist.length - 1]!;
+  return {
+    ...path,
+    points,
+    dist,
+    length,
+    rollAt: Math.min(path.rollAt, length),
+  };
 }
 
 /** The point raised, if need be, to the least height above the ground. */
@@ -747,6 +850,127 @@ function circles(view: RavenView): Path | null {
  * low over the water as he dives past the cards. */
 const LOW = 0.5;
 
+// ---------------------------------------------------------------------------
+// Flying a path: rather than following a drawn curve, the fly-in is flown by
+// a simple glider steered through its waypoints, so its speed, turns and
+// pull-outs are what a raven's wings could really do.
+
+/** A raven's best glide: at about this speed (m/s), some 9 m on for each
+ * metre down. Slower or faster costs more. */
+const BEST_GLIDE = 8.5;
+const LIFT_TO_DRAG = 9;
+/** The most lift his wings bear in a turn or pull-out, in g. */
+const MOST_LOAD = 2;
+/** Below this speed (m/s) he flaps to hold it, and how hard (m/s²). */
+const SLOWEST = 6;
+const THRUST = 3;
+/** About how long (s) he takes to swing onto a new heading. */
+const STEER = 0.9;
+/** The step the flight is worked out in (s), and the longest it may run. */
+const FLY_STEP = 1 / 60;
+const FLY_LONGEST = 40;
+
+/** Beyond this (metres) he is a speck, and a flown path ends. */
+const FLY_FARTHEST = 110;
+
+/** Fly through the waypoints from the first, setting off toward the second
+ * at `speed`: gravity, drag on a raven's glide polar, lift up to MOST_LOAD
+ * steering him at each waypoint in turn (easing toward the one after as he
+ * nears it), and flapping when he is slow or climbing. `floor` is the
+ * lowest he goes (y, metres). It ends once he has been in view and left
+ * it, or is FLY_FARTHEST off. Each step's position and speed. */
+function fly(
+  through: V[],
+  speed: number,
+  floor: number,
+  isInFrame: (p: V, margin?: number) => boolean,
+): { points: V[]; speeds: number[] } {
+  let p = through[0]!;
+  let v = scaleVector(normalize(subtractVectors(through[1]!, p)), speed);
+  const points: V[] = [p];
+  const speeds = [speed];
+  let k = 1;
+  let seen = false;
+  for (let i = 0; i < FLY_LONGEST / FLY_STEP && k < through.length; i++) {
+    const shown = isInFrame(p, 1.2);
+    seen ||= shown;
+    if ((seen && !shown) || Math.hypot(...p) > FLY_FARTHEST) break;
+    const vNow = Math.hypot(...v);
+    const dir = scaleVector(v, 1 / vNow);
+    const to = subtractVectors(through[k]!, p);
+    const away = Math.hypot(...to);
+    // Reached (or flown past) this waypoint: on to the next.
+    if (away < Math.max(1.5, vNow * 0.4) || dotProduct(to, dir) < 0) {
+      k++;
+      continue;
+    }
+    let aim = scaleVector(to, 1 / away);
+    const next = through[k + 1];
+    if (next) {
+      const ease = 0.6 * smoothstep(1 - away / (vNow * 2));
+      aim = normalize(
+        lerpVectors(aim, normalize(subtractVectors(next, p)), ease),
+      );
+    }
+    // Low over the water, he pulls up.
+    if (p[1] < floor + 1.5) {
+      aim = normalize(addVectors(aim, [0, (floor + 1.5 - p[1]) * 0.6, 0]));
+    }
+    // Lift holds him up across his line and turns him toward his aim,
+    // within what his wings bear.
+    const across = subtractVectors(aim, scaleVector(dir, dotProduct(aim, dir)));
+    const angle = Math.acos(Math.min(1, Math.max(-1, dotProduct(aim, dir))));
+    const turn =
+      Math.hypot(...across) > 1e-6
+        ? scaleVector(normalize(across), (vNow * angle) / STEER)
+        : ([0, 0, 0] as V);
+    let lift = addVectors(
+      subtractVectors([0, G, 0], scaleVector(dir, G * dir[1])),
+      turn,
+    );
+    const load = Math.hypot(...lift);
+    if (load > MOST_LOAD * G) lift = scaleVector(lift, (MOST_LOAD * G) / load);
+    // Drag on the glide polar: least at the best glide speed.
+    const ratio = (vNow / BEST_GLIDE) ** 2;
+    const drag = ((G / LIFT_TO_DRAG) * (ratio + 1 / ratio)) / 2;
+    // Flapping: to hold his speed when slow, and to carry him up a climb.
+    const thrust = Math.max(
+      vNow < SLOWEST ? THRUST + (SLOWEST - vNow) * 2 : 0,
+      dir[1] > 0.05 ? G * dir[1] * 0.9 : 0,
+    );
+    const accel = addVectors(
+      addVectors(lift, [0, -G, 0]),
+      scaleVector(dir, thrust - drag),
+    );
+    v = addVectors(v, scaleVector(accel, FLY_STEP));
+    p = addVectors(p, scaleVector(v, FLY_STEP));
+    points.push(p);
+    speeds.push(Math.hypot(...v));
+  }
+  return { points, speeds };
+}
+
+/** A path along flown points. */
+function flownPath(points: V[], speeds: number[]): Path {
+  const dist = [0];
+  for (let i = 1; i < points.length; i++) {
+    dist.push(
+      dist[i - 1]! + Math.hypot(...subtractVectors(points[i]!, points[i - 1]!)),
+    );
+  }
+  return {
+    points,
+    dist,
+    length: dist[dist.length - 1]!,
+    speed: speeds[0]!,
+    speeds,
+    slowNear: false,
+    fadeIn: true,
+    soar: false,
+    rollAt: -1,
+  };
+}
+
 /** Where the header and cards usually sit on screen, for a fly-in with none
  * given (after switching sky, when the cards are already up). */
 const USUAL_TARGETS: ScreenBox[] = [
@@ -833,36 +1057,40 @@ function entrance(view: RavenView): Path {
     );
   }
 
-  // In over the viewer's shoulder, overtaking him: just past the top-left
-  // corner and so close that the wings (reaching 0.6 m from his middle)
-  // start out of frame too, flying mostly away so that he grows out of the
-  // corner and draws off smoothly rather than darting across.
-  const near = randomBetween(1.3, 1.6);
+  // In over the top edge at the far left of the screen, close over the
+  // viewer's shoulder, wings at full span: his middle just above the frame
+  // so that his wings are in view from the start and he comes into it
+  // while still under 2 m off, big on the screen.
+  // Never wider than about half the screen (his span is 1.2 m), so on a
+  // narrow screen he comes in a little farther off.
+  const near = Math.max(randomBetween(1.25, 1.45), 1.2 / (2 * tanX * 0.5));
   const start = pointAtDepth(
-    -(1 + 0.75 / (near * tanX)) * randomBetween(1, 1.08),
-    (1 + 0.75 / (near * view.tanY)) * randomBetween(0.9, 1),
+    randomBetween(-0.85, -0.65),
+    1 + 0.4 / (near * view.tanY),
     near,
   );
-  // One long, straight-ish glide out over the title to above the first
-  // card, a few powerful wingbeats carrying him.
+  // He swoops down and away over the title and through the first card to
+  // the bottom of his dive, low over the water.
+  const tall = horizon > -0.3;
   const [x0, y0, x1, y1] = card;
-  const glide = lowPoint(
-    lerpNumber(x0, x1, randomBetween(0.35, 0.75)),
-    lerpNumber(y0, y1, randomBetween(0.55, 0.95)),
-    randomBetween(7, 10),
+  const dip = lowPoint(
+    lerpNumber(x0, x1, randomBetween(0.3, 0.7)),
+    tall
+      ? lerpNumber(y0, y1, randomBetween(0.1, 0.4))
+      : Math.max(horizon + 0.03, -0.85),
+    randomBetween(9, 13),
   );
   // Then the long swoop: down past the cards and low over the water toward
   // the bottom-right corner. On a wide screen the horizon is near the
   // bottom, so he stays just above it; on a tall one the cards are over
   // the water and he comes down close, skimming it, to pass below them.
-  const tall = horizon > -0.3;
   const lowY = Math.max(-0.92, randomBetween(-0.88, -0.6) - (stoop ? 0.08 : 0));
   const low = lowPoint(
     randomBetween(0.35, 0.75),
     tall ? lowY : Math.max(lowY, horizon + 0.04),
     randomBetween(14, 20) * (stoop ? 0.75 : 1),
     // Always on away from the viewer, never back toward him.
-    dotProduct(glide, fwd) + 3,
+    dotProduct(dip, fwd) + 3,
   );
   // Then out of the swoop, still low, banking the way he leaves...
   const exit = EXITS[Math.floor(Math.random() * EXITS.length)]!;
@@ -891,11 +1119,9 @@ function entrance(view: RavenView): Path {
   }
   const far = distantPoint();
 
-  const through: V[] = [start, glide];
+  const through: V[] = [start, dip];
   if (flourish === "weave") {
-    through.push(
-      besideLine(lerpVectors(glide, low, 0.5), glide, low, side * 0.2),
-    );
+    through.push(besideLine(lerpVectors(dip, low, 0.5), dip, low, side * 0.2));
   }
   through.push(low, turning, far);
 
@@ -945,15 +1171,22 @@ function entrance(view: RavenView): Path {
     ),
   );
 
-  // An easy glide, gathering a little speed as he goes down into the swoop.
-  const path = curve(through, randomBetween(8, 9), false, 0);
-  path.startSpeed = randomBetween(6.5, 7);
-  path.launch = 15;
+  // Flown, not drawn: his speed comes from gravity and his height, his
+  // turns from what his wings bear. Every waypoint but the first is kept
+  // clear of the skyline first, so his line does not need lifting after.
+  const { points, speeds } = fly(
+    [start, ...through.slice(1).map((q) => clearOfSkyline(q, view, 1.5))],
+    randomBetween(6.5, 7.2),
+    LOW - view.eye,
+    isInFrame,
+  );
+  const path = flownPath(points, speeds);
+  path.slowNear = true;
   path.fadeIn = false;
-  // The roll comes early in the swoop, while he is still near.
+  // The roll comes as he pulls out of the dive.
   if (flourish === "roll") {
     path.rollAt =
-      Math.hypot(...subtractVectors(glide, start)) + randomBetween(2, 5);
+      Math.hypot(...subtractVectors(dip, start)) + randomBetween(2, 5);
   }
   return path;
 }
@@ -1029,6 +1262,7 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
         // No flight fits this view: try again shortly rather than leave the
         // sky empty for a whole gap.
         if (!path) return bird.reset(randomBetween(1, 2));
+        path = keptClearOfSkyline(path, view);
         bird.entering = flyIn;
         flyIn = false;
         s = 0;
@@ -1043,6 +1277,7 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
         rollT = -1;
         up = null;
       }
+      dt *= timeScaleAt(path, s);
       const speed = speedAt(path, s);
       s += speed * dt;
       if (s >= path.length) return bird.reset();
@@ -1116,6 +1351,8 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
       }
       let flapping = wantFlap && !rolling;
       if (!rolling && fwd[1] > 0.07) flapping = true;
+      // On a flown path he flaps whenever he needed the thrust.
+      if (!rolling && path.speeds && speed < SLOWEST + 0.3) flapping = true;
       if (fwd[1] < -0.07) flapping = false;
       if (flapping && flap === 0) phase = LEVEL_PHASE;
       if (flapping) flapTarget = 1;
@@ -1139,7 +1376,8 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
         smoothstep((-fwd[1] - 0.06) / 0.14),
         rolling ? 0.6 : 0,
       );
-      rest = blendPoses(rest, TUCK, tuck);
+      // On the fly-in's swoop the wings stay half open, broad on screen.
+      rest = blendPoses(rest, TUCK, tuck * (bird.entering ? 0.3 : 1));
       const pose =
         flap > 0 ? blendPoses(rest, beat(phase), smoothstep(flap)) : rest;
 

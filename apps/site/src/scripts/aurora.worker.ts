@@ -744,8 +744,12 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       if (painted[i]) return;
       const [x, y, w, h] = box;
       // His body reaching it, not just a wing tip: his middle within a
-      // quarter of his size of the box.
-      const [mx, my] = [(bx1 - bx0) / 4, (by1 - by0) / 4];
+      // quarter of his size of the box. The header, a thin strip across the
+      // top, he sweeps with a wing as he comes in: any of him will do.
+      const [mx, my] =
+        i === 0
+          ? [(bx1 - bx0) / 2, (by1 - by0) / 2]
+          : [(bx1 - bx0) / 4, (by1 - by0) / 4];
       const over =
         at[0] > x - mx &&
         at[0] < x + w + mx &&
@@ -1268,10 +1272,22 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     }
   }
 
+  // Whether the fly-in can run at 60 fps here, and the time between its
+  // frames lately (ms).
+  let smooth = true;
+  let paceMs = FLY_IN_FRAME_MS;
   function onFrame(stamp: number): void {
     raf = nextFrame(onFrame);
     const elapsed = stamp - last;
-    if (elapsed < (bird.entering ? FLY_IN_FRAME_MS : FRAME_MS) - 2) return;
+    // The fly-in at 60 fps while he is close and crossing the screen fast,
+    // and only while frames keep up: an uneven 60 looks worse than a steady
+    // 30.
+    const fast = bird.entering && smooth && Math.hypot(...bird.position) < 15;
+    if (elapsed < (fast ? FLY_IN_FRAME_MS : FRAME_MS) - 2) return;
+    if (fast && last && elapsed < 200) {
+      paceMs = paceMs * 0.9 + elapsed * 0.1;
+      if (paceMs > 22) smooth = false;
+    }
     if (last) {
       const dt = Math.min(elapsed, 100) / 1000;
       t += dt;
