@@ -61,6 +61,13 @@ const RAD = Math.PI / 180;
  * bird's size on screen smooths its edges. */
 const RAVEN_TEX = 512;
 
+/** The shortest and longest sweep that draws a page box in, seconds. */
+const BRUSH_QUICKEST = 0.6;
+const BRUSH_LONGEST = 1;
+/** Seconds after the first card that the second always starts. His flight
+ * does not cross the second card soon enough to start it himself. */
+const SECOND_CARD_FOLLOWS = 0.6;
+
 // Wall-clock epoch milliseconds from Temporal (via gmt): the stars, planets,
 // moon and sun need the real time. Frame timing uses rAF stamps, not the wall
 // clock.
@@ -660,19 +667,20 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
 
   // The page's header, title, intro and cards, hidden until the fly-in
   // reaches them: his flight draws each one in. As he reaches a box the page
-  // starts a sweep across it the way he is flying, paced so its edge
-  // follows just behind him (it enters the box a quarter of the way into
-  // the sweep and crosses it in the middle half; see Base.astro). A box he
-  // never reaches is drawn in once he is past its middle on his way down
-  // the screen (top left to bottom right), or soon after the last one.
+  // starts a quick sweep across it the way he is flying (its edge enters the
+  // box a quarter of the way into the sweep and crosses it in the middle
+  // half; see Base.astro). A box he has not reached is drawn in once he is
+  // past its middle on his way down the screen (top left to bottom right). The
+  // second card starts a fixed time after the first, so the two keep the same
+  // timing against him on every load.
   let targets: PageBox[] = init.targets;
   let painted = targets.map(() => false);
   let seen: [number, number] | null = null;
   let heading: [number, number] = [Math.SQRT1_2, Math.SQRT1_2];
   // His speed across the screen, CSS pixels a second, and the seconds since
-  // a box was last drawn in.
+  // the first card started drawing in.
   let pace = 0;
-  let sincePaint = 0;
+  let sinceFirstCard = 0;
   /** A page box on screen, -1 to 1 with y up, as the raven plans in. */
   function onScreen([x, y, w, h]: PageBox): ScreenBox {
     const [W, H] = [width || 1, height || 1];
@@ -697,18 +705,20 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   function paint(i: number): void {
     const [, span] = spanAlongHeading(targets[i]!);
     painted[i] = true;
-    sincePaint = 0;
     scope.postMessage({
       brush: i,
       angle: Math.round(
         (Math.atan2(heading[0], -heading[1]) / RAD + 360) % 360,
       ),
-      // The sweep's edge crosses the box in the middle half of the sweep,
-      // a little slower than he is going now: he slows on screen as he
-      // draws away, and the edge should never overtake him.
+      // The sweep's edge crosses the box in the middle half of the sweep, at
+      // about his pace where the limits allow. A large box or a slowing bird
+      // hits BRUSH_LONGEST, and then the edge can overtake him.
       duration:
         Math.round(
-          Math.min(5, Math.max(1.6, (2 * span) / (0.7 * pace || 1))) * 100,
+          Math.min(
+            BRUSH_LONGEST,
+            Math.max(BRUSH_QUICKEST, (2 * span) / (0.7 * pace || 1)),
+          ) * 100,
         ) / 100,
     });
   }
@@ -759,12 +769,11 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       // heading at the moment can swing back as he turns.
       const [W, H] = [width || 1, height || 1];
       const past = at[0] * W + at[1] * H >= (x + w / 2) * W + (y + h / 2) * H;
-      if (over || past) paint(i);
-      // One his path never reaches (a card below his swoop on a phone)
-      // follows on soon after the last, while he is clear of it.
-      else if (sincePaint > 1.1 && painted.includes(true)) paint(i);
+      const follows =
+        i === 2 && painted[1] && sinceFirstCard >= SECOND_CARD_FOLLOWS;
+      if (over || past || follows) paint(i);
     });
-    sincePaint += dt;
+    if (painted[1]) sinceFirstCard += dt;
   }
   /** The bird's extent on the page in CSS pixels: left, top, right, bottom. */
   function birdOnPage(): [number, number, number, number] {

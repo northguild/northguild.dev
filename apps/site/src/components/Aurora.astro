@@ -233,7 +233,6 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     page.classList.remove("ng-await");
   }
   let lastAngle = 135;
-  let backstop = 0;
   // Sweep the pane in toward `angle` (a CSS gradient angle), drifting a
   // little along his line, over `duration` seconds.
   function brushPane(i: number, angle: number, duration: number): void {
@@ -256,10 +255,14 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     el.style.setProperty("--ng-dy", dy.toFixed(3));
     el.style.setProperty("--ng-brush-duration", `${duration}s`);
     el.classList.add("ng-brushed");
-    // Should the rest never come (the worker stalled), they follow anyway.
-    backstop ||= window.setTimeout(() => {
-      panes.forEach((_, j) => brushPane(j, lastAngle, 1.6));
-    }, 8000);
+  }
+  // His flight draws the panes in. This is only a safety net for a stalled
+  // worker, late enough never to start a pane ahead of him in a normal flight.
+  function brushRemainingPanes(): void {
+    panes.forEach((_, i) => brushPane(i, lastAngle, 1));
+  }
+  if (panes.length) {
+    setTimeout(brushRemainingPanes, Math.max(0, 8000 - performance.now()));
   }
 
   // All WebGL runs in the worker. Without OffscreenCanvas the CSS gradient
@@ -299,7 +302,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
         if (typeof data === "object") {
           if ("brush" in data) {
             if (data.brush < 0) showAllPanes();
-            else brushPane(data.brush, data.angle ?? 135, data.duration ?? 1.6);
+            else brushPane(data.brush, data.angle ?? 135, data.duration ?? 1);
           } else if ("pick" in data) {
             showPick(data.pick);
           } else if ("times" in data) {
