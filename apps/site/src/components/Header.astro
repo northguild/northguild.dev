@@ -31,7 +31,9 @@ const links = [
         <a
           class="gmt-icon-button gmt-sonar-focus"
           href={l.href}
-          aria-label={l.label}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`${l.label} (opens in a new tab)`}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
             <path d={l.path} />
