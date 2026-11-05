@@ -10,7 +10,11 @@ interface Props {
 const { name, description, docsHref, githubHref, order = 0 } = Astro.props;
 ---
 
-<article class="gmt-glass repo-card ng-enter-pane" style={`--order: ${order}`}>
+<article
+  class="gmt-glass repo-card ng-enter-pane"
+  data-ng-target="card"
+  style={`--order: ${order}`}
+>
   <h2>{name}</h2>
   <p>{description}</p>
   <div class="links">

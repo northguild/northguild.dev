@@ -8,6 +8,11 @@
 // leaves into the distance, a little differently every time. His flight
 // draws in the page's header, title and cards (see aurora.worker.ts).
 //
+// Coming back to the page from one of its own (the GMT or worktree docs),
+// the fly-in runs the other way: a speck far off against the sky, he flies
+// home toward the viewer and sweeps past close by, out through any edge of
+// the frame. Everything but the header waits for him then.
+//
 // After that each flight is planned in the camera's frame so that it crosses
 // the window: usually a pass along a gentle curve 20 to 65 m away, sometimes
 // a few lazy circles farther out, low over the horizon where the aurora
@@ -34,9 +39,12 @@ export type RavenView = {
   /** The highest a flight's middle goes on screen (-1 bottom, 1 top): clear
    * of the page's cards. */
   ceiling: number;
-  /** The boxes a fly-in should pass behind, header first, on screen (-1 to
-   * 1, y up). Empty for a fly-in over the usual places. */
-  targets: ScreenBox[];
+  /** The page's cards on screen (-1 to 1, y up), in page order: the first
+   * fly-in dives through the first. Empty for the usual place. */
+  cards: ScreenBox[];
+  /** The card for the page the visitor came back from, or null: the
+   * homecoming starts out behind it. */
+  from: ScreenBox | null;
 };
 
 /** A box on screen: left, bottom, right, top, each -1 to 1, y up. */
@@ -60,6 +68,9 @@ const G = 9.81;
 /** Metres over which the bird fades in at a flight's start and out at its
  * end: unseen when the ends are out of frame, as most are. */
 const FADE = 12;
+/** The homecoming's quicker fade-in (metres): he starts near enough to be
+ * seen as a bird, so he shows almost at once. */
+const HOMECOMING_FADE = 4;
 const RAD = Math.PI / 180;
 
 function addVectors(a: V, b: V): V {
@@ -415,9 +426,10 @@ type Path = {
    * slower the nearer he is (see timeScaleAt), so up close he is big and
    * unhurried and his speed across the screen stays calm. */
   slowNear: boolean;
-  /** Whether to fade in over the first FADE metres: not for a fly-in, which
-   * starts out of frame and close by. */
-  fadeIn: boolean;
+  /** Metres to fade in over at the start (0 for none: not at an end out of
+   * frame and close by), and whether to fade out over the last FADE. */
+  fadeIn: number;
+  fadeOut: boolean;
   soar: boolean;
   /** Distance along the path at which to roll over, or -1 for none. */
   rollAt: number;
@@ -482,7 +494,8 @@ function curve(through: V[], speed: number, soar: boolean, roll: number): Path {
     speed,
     speeds: null,
     slowNear: false,
-    fadeIn: true,
+    fadeIn: FADE,
+    fadeOut: true,
     soar,
     rollAt,
   };
@@ -645,13 +658,25 @@ function clearOfSkyline(p: V, view: RavenView, extra = 0): V {
 
 /** Metres either side over which a lift clear of the skyline is eased. */
 const LIFT_EASE = 4;
+/** Close by he fills enough of the screen to show against the mountains
+ * too: no lift within LIFT_NEAREST metres, the full lift from LIFT_FULL,
+ * eased between. Lifting him that close would bend his line sharply, right
+ * where every bend shows. */
+const LIFT_NEAREST = 4;
+const LIFT_FULL = 12;
 
 /** The path with every point kept clear of the skyline. */
 function keptClearOfSkyline(path: Path, view: RavenView): Path {
   // How far each point must rise, then eased along the path (the most
   // within a few metres either side, then averaged) so that lifting him
   // clear never puts a kink in his line.
-  const rise = path.points.map((p) => clearOfSkyline(p, view)[1] - p[1]);
+  const rise = path.points.map(
+    (p) =>
+      (clearOfSkyline(p, view)[1] - p[1]) *
+      smoothstep(
+        (Math.hypot(...p) - LIFT_NEAREST) / (LIFT_FULL - LIFT_NEAREST),
+      ),
+  );
   if (!rise.some((r) => r > 0)) return path;
   function near(i: number, f: (j: number) => void): void {
     const { dist } = path;
@@ -965,18 +990,16 @@ function flownPath(points: V[], speeds: number[]): Path {
     speed: speeds[0]!,
     speeds,
     slowNear: false,
-    fadeIn: true,
+    fadeIn: FADE,
+    fadeOut: true,
     soar: false,
     rollAt: -1,
   };
 }
 
-/** Where the header and cards usually sit on screen, for a fly-in with none
- * given (after switching sky, when the cards are already up). */
-const USUAL_TARGETS: ScreenBox[] = [
-  [-1, 0.84, 1, 1],
-  [-0.62, -0.25, 0.62, 0.35],
-];
+/** Where the first card usually sits on screen, for a fly-in with no cards
+ * given. */
+const USUAL_CARD: ScreenBox = [-0.62, -0.25, 0.62, 0.35];
 
 /** The variations on a fly-in: a plain swoop, a roll while he is still
  * close, a steeper and lower dive, a few wide circles in the distance, or an
@@ -1037,8 +1060,7 @@ function besideLine(p: V, a: V, b: V, k: number): V {
  * left, on into the background, or off to the right. */
 function entrance(view: RavenView): Path {
   const { fwd, tanX, horizon, isInFrame, pointAtDepth } = frame(view);
-  const boxes = view.targets.length ? view.targets : USUAL_TARGETS;
-  const card = boxes[1] ?? USUAL_TARGETS[1]!;
+  const card = view.cards[0] ?? USUAL_CARD;
   const flourish = FLOURISHES[Math.floor(Math.random() * FLOURISHES.length)]!;
   const stoop = flourish === "stoop";
   const side = Math.random() < 0.5 ? -1 : 1;
@@ -1182,7 +1204,7 @@ function entrance(view: RavenView): Path {
   );
   const path = flownPath(points, speeds);
   path.slowNear = true;
-  path.fadeIn = false;
+  path.fadeIn = 0;
   // The roll comes as he pulls out of the dive.
   if (flourish === "roll") {
     path.rollAt =
@@ -1191,7 +1213,213 @@ function entrance(view: RavenView): Path {
   return path;
 }
 
+/** Where a homecoming leaves the frame (-1 to 1 on each axis): over the top
+ * or out either side, no lower than a quarter of the way up. Never out the
+ * bottom: diving away under the viewer looks wrong for a bird coming home. */
+function randomPointOnEdge(): [number, number] {
+  const side = Math.floor(Math.random() * 3);
+  if (side === 0) return [randomBetween(-1, 1), 1];
+  return [side === 1 ? 1 : -1, randomBetween(-0.5, 1)];
+}
+
+/** The fly-in run the other way, on coming back to the page: a speck far off
+ * against the sky, anywhere across the view or just past its sides, he
+ * flies home toward the viewer, growing as he nears, across the cards (so
+ * his passing draws them in) and sweeps past close by out through any edge
+ * of the frame. */
+function plannedHomecoming(view: RavenView, close: boolean): Path {
+  const { right, up, fwd, tanX, horizon, pointAtDepth } = frame(view);
+  // How near he comes is planned by how big he looks, the same on any
+  // screen: the share of its width his 1.2 m span fills as he closes in.
+  // Each stage of his approach is then at least that far off.
+  const size = close ? randomBetween(0.34, 0.46) : randomBetween(0.15, 0.26);
+  const closest = 1.2 / (2 * tanX * size);
+  const middleDepth = Math.max(randomBetween(5, 7), closest * 1.6);
+  const farDepth = Math.max(randomBetween(9, 12), middleDepth * 1.7);
+
+  // Across the screen he starts anywhere, or back from one of the cards'
+  // pages, out beyond that card: from its middle toward its own side.
+  function startAcross(): number {
+    if (!view.from) return randomBetween(-1.25, 1.25);
+    const middle = (view.from[0] + view.from[2]) / 2;
+    const side = Math.abs(middle) > 0.1 ? Math.sign(middle) : 0;
+    return Math.min(
+      0.95,
+      Math.max(-0.95, middle + side * randomBetween(0, 0.35)),
+    );
+  }
+  // Far off and above the skyline, where the aurora lights the sky behind
+  // him; and where that is on screen, to draw the rest of his line from.
+  function farPoint(): { p: V; at: [number, number] } {
+    let found: { p: V; at: [number, number] } = { p: [0, 0, 0], at: [0, 0] };
+    for (let tries = 0; tries < 10; tries++) {
+      const at: [number, number] = [
+        startAcross(),
+        Math.min(0.9, horizon + randomBetween(0.06, 0.4) + tries * 0.05),
+      ];
+      found = { p: pointAtDepth(...at, farDepth), at };
+      if (skyward(found.p, view)) return found;
+    }
+    return { ...found, p: keepAboveGround(found.p, view) };
+  }
+  const far = farPoint();
+
+  // On his way, behind some part of the cards: anywhere over the whole
+  // spread of them, not only one card's middle.
+  const spread = view.cards.length ? view.cards : [USUAL_CARD];
+  const [x0, y0, x1, y1] = [
+    Math.min(...spread.map((c) => c[0])),
+    Math.min(...spread.map((c) => c[1])),
+    Math.max(...spread.map((c) => c[2])),
+    Math.max(...spread.map((c) => c[3])),
+  ];
+  const middle = keepAboveGround(
+    pointAtDepth(
+      lerpNumber(x0, x1, randomBetween(0.15, 0.85)),
+      lerpNumber(y0, y1, randomBetween(0.15, 0.85)),
+      middleDepth,
+    ),
+    view,
+    LOW,
+  );
+  // Whether any of him still shows: his middle within the frame widened by
+  // his half-span on screen (with a little to spare), so that he ends only
+  // once his wing tips are out of view too.
+  function stillShowing(p: V): boolean {
+    const z = dotProduct(p, fwd);
+    if (z < 0.3) return false;
+    const reach = 0.9 / z;
+    return (
+      Math.abs(dotProduct(p, right) / z) < tanX + reach &&
+      Math.abs(dotProduct(p, up) / z) < view.tanY + reach
+    );
+  }
+  // Out past an edge he can reach: not under the water or below the
+  // ground, which would leave him gliding along the bottom of the frame.
+  function exitPoint(): { closing: V; out: V; beyond: V } {
+    let found = {
+      closing: [0, 0, 0] as V,
+      out: [0, 0, 0] as V,
+      beyond: [0, 0, 0] as V,
+    };
+    for (let tries = 0; tries < 8; tries++) {
+      const [ex, ey] =
+        tries < 7 ? randomPointOnEdge() : [Math.sign(far.at[0]) || 1, 0];
+      // Closing in at the size planned, heading for the edge, then out
+      // past it a little nearer, and on out sideways rather than into the
+      // lens.
+      const depth = closest * randomBetween(0.7, 0.85);
+      found = {
+        closing: keepAboveGround(
+          pointAtDepth(ex * 0.6, ey * 0.6, closest),
+          view,
+          LOW,
+        ),
+        out: keepAboveGround(
+          pointAtDepth(ex * 1.5, ey * 1.5, depth),
+          view,
+          LOW,
+        ),
+        beyond: keepAboveGround(pointAtDepth(ex * 3, ey * 3, depth), view, LOW),
+      };
+      if (!stillShowing(found.beyond)) return found;
+    }
+    return found;
+  }
+  const { closing, out, beyond } = exitPoint();
+
+  // Flown like the first fly-in. Only the far waypoints are kept clear of
+  // the skyline: close by he shows against the mountains too.
+  const { points, speeds } = fly(
+    [far.p, clearOfSkyline(middle, view, 1.5), closing, out, beyond],
+    // About his best glide: a raven's own unhurried pace.
+    randomBetween(7, 8),
+    LOW - view.eye,
+    stillShowing,
+  );
+  // Should his line still end in view, he glides on straight until he is
+  // out of it, rather than vanish.
+  const last = points[points.length - 1]!;
+  const heading = normalize(
+    subtractVectors(last, points[Math.max(0, points.length - 2)]!),
+  );
+  for (let i = 1; i <= 300 && stillShowing(points[points.length - 1]!); i++) {
+    points.push(addVectors(last, scaleVector(heading, i * 0.1)));
+    speeds.push(speeds[speeds.length - 1]!);
+  }
+  const path = flownPath(points, speeds);
+  path.slowNear = true;
+  // He comes out of the distance and leaves out of frame close by.
+  path.fadeIn = HOMECOMING_FADE;
+  path.fadeOut = false;
+  return path;
+}
+
+/** How often a homecoming is a close pass, sweeping by as near as the
+ * first fly-in comes in, and how big he gets: the most of the screen's
+ * width his wingspan fills while he is in view. A close pass matches the
+ * first fly-in (about a third to a half); the others stay smaller. */
+const CLOSE_PASSES = 0.4;
+const CLOSE_PASS_SIZE: [number, number] = [0.3, 0.5];
+const USUAL_SIZE: [number, number] = [0.1, 0.3];
+/** The longest a homecoming may take, seconds, slow motion and all. The
+ * page is drawn in well before he is gone (see the worker). */
+const HOMECOMING_LONGEST = 5;
+/** Seconds before a homecoming, once the sky is up: he sets off at once. */
+const HOMECOMING_WAIT: [number, number] = [0.1, 0.3];
+
+/** How long the path takes to fly, seconds, slow motion and all. */
+function flightSeconds(path: Path): number {
+  let seconds = 0;
+  for (let i = 1; i < path.points.length; i++) {
+    const s = path.dist[i]!;
+    const ds = s - path.dist[i - 1]!;
+    seconds += ds / (speedAt(path, s) * timeScaleAt(path, s) || 1);
+  }
+  return seconds;
+}
+
+/** A homecoming of the size wanted and no longer than HOMECOMING_LONGEST:
+ * his momentum can carry him nearer or farther than planned, so a few are
+ * planned and the first that fits is flown, or failing that the nearest
+ * fit. He never waits on a plan. */
+function homecoming(view: RavenView): Path {
+  const { fwd, tanX, isInFrame } = frame(view);
+  const close = Math.random() < CLOSE_PASSES;
+  const [least, most] = close ? CLOSE_PASS_SIZE : USUAL_SIZE;
+  // The most of the screen's width his wingspan fills while in view.
+  function biggest(path: Path): number {
+    return Math.max(
+      0,
+      ...path.points
+        .filter((p) => isInFrame(p, 1))
+        .map((p) => 1.2 / (2 * tanX * dotProduct(p, fwd))),
+    );
+  }
+  // How far a plan is from fitting: 0 when it fits.
+  function misfit(path: Path): number {
+    const size = biggest(path);
+    return (
+      Math.max(0, least - size, size - most) * 10 +
+      Math.max(0, flightSeconds(path) - HOMECOMING_LONGEST) +
+      (path.length > 6 ? 0 : 100)
+    );
+  }
+  let best = plannedHomecoming(view, close);
+  let bestMisfit = misfit(best);
+  for (let tries = 1; tries < 12 && bestMisfit > 0; tries++) {
+    const path = plannedHomecoming(view, close);
+    const off = misfit(path);
+    if (off < bestMisfit) [best, bestMisfit] = [path, off];
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
+
+/** Which fly-in starts the page: "first", in over the viewer's shoulder, or
+ * "return", the homecoming. */
+export type FlyIn = "first" | "return";
 
 export type Raven = {
   /** Fly on by dt seconds, planning a new flight in this view when one is
@@ -1204,6 +1432,11 @@ export type Raven = {
   enter(wait: number): void;
   /** Whether the flight under way is a fly-in. */
   entering: boolean;
+  /** The flight under way, in world space: its points and the distance
+   * flown to each. Null between flights. */
+  flight: { points: V[]; dist: number[]; fadeIn: number } | null;
+  /** How far along the flight he is, metres. */
+  flown: number;
   /** Where the bird is, in world space. */
   position: V;
   /** The bird's triangles in world space (RAVEN_STRIDE floats a vertex). */
@@ -1214,10 +1447,16 @@ export type Raven = {
   alpha: number;
 };
 
-export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
+export function raven(
+  timing: RavenTiming = RAVEN_TIMING,
+  flyIn: FlyIn = "first",
+): Raven {
   const mesh = new Float32Array(TRIS * 3 * RAVEN_STRIDE);
-  let wait = randomBetween(...timing.entrance);
-  let flyIn = true;
+  let wait =
+    flyIn === "return"
+      ? randomBetween(...HOMECOMING_WAIT)
+      : randomBetween(...timing.entrance);
+  let entranceDue = true;
   let path: Path | null = null;
   let s = 0;
   let size = 1;
@@ -1239,23 +1478,28 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
     count: 0,
     alpha: 0,
     entering: false,
+    flight: null,
+    flown: 0,
     position: [0, 0, 0],
     reset(next) {
       path = null;
+      bird.flight = null;
       bird.count = 0;
       bird.entering = false;
       wait = next ?? randomBetween(...timing.gap);
     },
     enter(next) {
       bird.reset(next);
-      flyIn = true;
+      entranceDue = true;
     },
     step(dt, view) {
       if (!path) {
         wait -= dt;
         if (wait > 0) return;
-        path = flyIn
-          ? entrance(view)
+        path = entranceDue
+          ? flyIn === "return"
+            ? homecoming(view)
+            : entrance(view)
           : Math.random() < 0.3
             ? circles(view)
             : pass(view);
@@ -1263,8 +1507,13 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
         // sky empty for a whole gap.
         if (!path) return bird.reset(randomBetween(1, 2));
         path = keptClearOfSkyline(path, view);
-        bird.entering = flyIn;
-        flyIn = false;
+        bird.entering = entranceDue;
+        bird.flight = {
+          points: path.points,
+          dist: path.dist,
+          fadeIn: path.fadeIn,
+        };
+        entranceDue = false;
         s = 0;
         size = randomBetween(0.94, 1.08);
         // Slower, deeper wingbeats on the fly-in.
@@ -1281,9 +1530,10 @@ export function raven(timing: RavenTiming = RAVEN_TIMING): Raven {
       const speed = speedAt(path, s);
       s += speed * dt;
       if (s >= path.length) return bird.reset();
+      bird.flown = s;
       bird.alpha =
-        (path.fadeIn ? smoothstep(s / FADE) : 1) *
-        smoothstep((path.length - s) / FADE);
+        (path.fadeIn ? smoothstep(s / path.fadeIn) : 1) *
+        (path.fadeOut ? smoothstep((path.length - s) / FADE) : 1);
 
       // Heading and bank. The lift must carry the bird's weight and turn it,
       // so it leans along gravity plus the turn's acceleration (a coordinated

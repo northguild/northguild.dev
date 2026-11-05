@@ -155,7 +155,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   import type { SiteTimes } from "../scripts/aurora.ahead";
   import type {
     AuroraMessage,
-    PageBox,
+    PageTarget,
     SkyLabel,
     SkyLine,
     WorkerMessage,
@@ -210,23 +210,45 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
   // Huginn's fly-in draws in the header, title, intro and cards as he
   // reaches them. Base.astro hides them (`ng-await`) until the worker says
   // he has reached each one; without a fly-in they come in by the usual
-  // entrance instead. The panes go first (the header, then the cards):
-  // the worker plans his path through the first two.
+  // entrance instead. Coming back to the page (`ng-return`, see Base.astro)
+  // he flies home from the distance instead, and the header stays as it
+  // was: only the title, intro and cards wait for him. Each says what it is (`data-ng-target`): the worker reaches the
+  // header and cards in their own ways, and plans his path by the cards.
   const page = document.documentElement;
+  const returning = page.classList.contains("ng-return");
   const panes = page.classList.contains("ng-await")
     ? [
-        ...document.querySelectorAll<HTMLElement>(".ng-enter-pane"),
-        ...document.querySelectorAll<HTMLElement>(".ng-enter-text"),
-      ]
+        ...document.querySelectorAll<HTMLElement>(
+          ".ng-enter-pane, .ng-enter-text",
+        ),
+      ].filter((el) => !returning || el.dataset.ngTarget !== "header")
     : [];
   function isAwaiting(): boolean {
     return page.classList.contains("ng-await");
   }
-  function paneBoxes(): PageBox[] {
+  function targetKind(el: HTMLElement): PageTarget["kind"] {
+    const kind = el.dataset.ngTarget;
+    return kind === "header" || kind === "card" ? kind : "text";
+  }
+  // The card for the page this visit came back from: the one with a link to
+  // where that page sits ("/gmt/" for any of the GMT docs). -1 if none.
+  function cardCameFrom(): number {
+    const path = page.dataset.ngFrom ?? "";
+    if (!returning || !path) return -1;
+    return panes.findIndex(
+      (el) =>
+        el.dataset.ngTarget === "card" &&
+        [...el.querySelectorAll("a")].some((a) => {
+          const { pathname } = new URL(a.href);
+          return pathname.length > 1 && path.startsWith(pathname);
+        }),
+    );
+  }
+  function pageTargets(): PageTarget[] {
     if (!isAwaiting()) return [];
     return panes.map((el) => {
       const r = el.getBoundingClientRect();
-      return [r.left, r.top, r.width, r.height];
+      return { kind: targetKind(el), box: [r.left, r.top, r.width, r.height] };
     });
   }
   function showAllPanes(): void {
@@ -257,12 +279,15 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     el.classList.add("ng-brushed");
   }
   // His flight draws the panes in. This is only a safety net for a stalled
-  // worker, late enough never to start a pane ahead of him in a normal flight.
+  // or slow worker: on a first visit late enough never to start a pane ahead
+  // of him in a normal flight; coming back, the page is in by 3 s whatever
+  // he is doing.
   function brushRemainingPanes(): void {
     panes.forEach((_, i) => brushPane(i, lastAngle, 1));
   }
   if (panes.length) {
-    setTimeout(brushRemainingPanes, Math.max(0, 8000 - performance.now()));
+    const by = returning ? 3000 : 8000;
+    setTimeout(brushRemainingPanes, Math.max(0, by - performance.now()));
   }
 
   // All WebGL runs in the worker. Without OffscreenCanvas the CSS gradient
@@ -294,7 +319,9 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           site: chosen,
           still: motion.matches,
           hidden: document.hidden,
-          targets: paneBoxes(),
+          targets: pageTargets(),
+          flyIn: returning ? "return" : "first",
+          from: cardCameFrom(),
         },
         [offscreen],
       );
@@ -336,7 +363,7 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
               type: "size",
               width: canvas.clientWidth,
               height: canvas.clientHeight,
-              targets: paneBoxes(),
+              targets: pageTargets(),
             }),
           150,
         );

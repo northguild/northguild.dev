@@ -23,6 +23,7 @@ const links = [
 
 <header
   class:list={["gmt-glass", "site-header", { "ng-enter-pane": entrance }]}
+  data-ng-target={entrance ? "header" : undefined}
 >
   <div class="wordmark"><NorthGuildMark />NorthGuild</div>
   <nav aria-label="NorthGuild community">

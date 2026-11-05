@@ -58,22 +58,69 @@ const ogAlt =
       crossorigin
     />
     {
+      entrance && import.meta.env.DEV && (
+        <script is:inline>
+          // Dev only: `?huginn=return` or `?huginn=first` picks the fly-in to
+          // preview, whatever page came before, and `&from=/gmt/` (any path)
+          // the page to come back from. Reload for a new flight.
+          {
+            const query = new URLSearchParams(location.search);
+            const page = document.documentElement;
+            page.dataset.huginn = query.get("huginn") || "";
+            page.dataset.ngFrom = query.get("from") || "";
+          }
+        </script>
+      )
+    }
+    {
       entrance && (
         <script is:inline>
-          // Huginn's fly-in paints the header and cards in as he passes
-          // (Aurora.astro); they wait for him, hidden. Only where the sky can
-          // run with motion, and never for more than 4 s: if he has not
-          // passed the first by then, the usual entrance plays.
+          "use strict";
+          // Coming back from another of the site's pages (the GMT or worktree
+          // docs), or by Back or Forward: the header is already up, so it
+          // stays put and only the title, intro and cards come in again. A
+          // fresh visit or a reload plays the whole entrance. The page came
+          // back from is kept (`data-ng-from`) so Huginn can fly home from
+          // its card's side; Back and Forward do not say which page that was.
+          // In a block, so nothing here is left on the window.
+          {
+          // The path of the page this visit came back from, "" when that is
+          // not known (Back or Forward), or null when it is not a return.
+          function cameBackFrom() {
+            try {
+              const visit = performance.getEntriesByType("navigation")[0];
+              if (visit && visit.type === "back_forward") return "";
+              if (visit && visit.type !== "navigate") return null;
+              const from = new URL(document.referrer);
+              return from.origin === location.origin &&
+                from.pathname !== location.pathname
+                ? from.pathname
+                : null;
+            } catch {
+              return null;
+            }
+          }
+          const page = document.documentElement;
+          const back = cameBackFrom();
+          const flyIn =
+            page.dataset.huginn || (back === null ? "first" : "return");
+          if (flyIn === "return") page.classList.add("ng-return");
+          if (back) page.dataset.ngFrom = back;
+          // Huginn's fly-in paints the page in as he passes (Aurora.astro);
+          // it waits for him, hidden. Only where the sky can run with motion,
+          // and never for more than 4 s: if he has not reached the first box
+          // by then, the usual entrance plays.
           if (
             !matchMedia("(prefers-reduced-motion: reduce)").matches &&
             "transferControlToOffscreen" in HTMLCanvasElement.prototype
           ) {
-            document.documentElement.classList.add("ng-await");
+            page.classList.add("ng-await");
             setTimeout(function showIfHuginnIsLate() {
               if (!document.querySelector(".ng-brushed")) {
-                document.documentElement.classList.remove("ng-await");
+                page.classList.remove("ng-await");
               }
             }, 4000);
+          }
           }
         </script>
       )
@@ -217,6 +264,13 @@ const ogAlt =
   html.ng-await :is(.ng-enter-pane, .ng-enter-text):not(.ng-brushed) {
     animation-name: none;
     opacity: 0;
+  }
+  /* Coming back (`ng-return`, set in the head): the header is already up
+     and stays as it is. The title, intro and cards come in again, by
+     Huginn's homecoming or the usual entrance. */
+  html.ng-return :is(.ng-enter-pane, .ng-enter-text)[data-ng-target="header"] {
+    animation-name: none;
+    opacity: 1;
   }
   :is(.ng-enter-pane, .ng-enter-text).ng-brushed {
     --ng-sweep: linear-gradient(
