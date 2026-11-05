@@ -169,6 +169,9 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     "--gmt-teal",
     "--gmt-dst-purple",
     "--gmt-ice",
+    "--gmt-aurora-green",
+    "--gmt-aurora-red",
+    "--gmt-aurora-fringe",
   ];
 
   // The visitor can switch site in the popover, which always shows the site
@@ -322,6 +325,13 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
           targets: pageTargets(),
           flyIn: returning ? "return" : "first",
           from: cardCameFrom(),
+          // Dev only (Base.astro): `?aurora=active` or `?aurora=calm`.
+          activity:
+            page.dataset.aurora === "active"
+              ? 1
+              : page.dataset.aurora === "calm"
+                ? 0
+                : -1,
         },
         [offscreen],
       );

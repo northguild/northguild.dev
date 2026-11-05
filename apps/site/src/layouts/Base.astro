@@ -62,12 +62,14 @@ const ogAlt =
         <script is:inline>
           // Dev only: `?huginn=return` or `?huginn=first` picks the fly-in to
           // preview, whatever page came before, and `&from=/gmt/` (any path)
-          // the page to come back from. Reload for a new flight.
+          // the page to come back from. Reload for a new flight. `?aurora=active`
+          // or `?aurora=calm` holds the aurora in a surge or quiet.
           {
             const query = new URLSearchParams(location.search);
             const page = document.documentElement;
             page.dataset.huginn = query.get("huginn") || "";
             page.dataset.ngFrom = query.get("from") || "";
+            page.dataset.aurora = query.get("aurora") || "";
           }
         </script>
       )

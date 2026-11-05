@@ -86,7 +86,16 @@ function readWallClock(): number {
 }
 
 type Rgb = [number, number, number];
-type Skyline = typeof ISAFJORDUR;
+/** A site's skyline (see scripts/build-skyline.mjs): `near` only where
+ * water shows below the far shore as seen from land. */
+type Skyline = {
+  from: number;
+  step: number;
+  elev: string;
+  dist: string;
+  base: string;
+  near?: string;
+};
 
 // Skylines by site id (see scripts/build-skyline.mjs).
 const SKYLINES: Record<string, Skyline> = {
@@ -117,6 +126,9 @@ export type AuroraMessage =
        * targets), or -1: the homecoming starts behind it, and the title
        * and intro sweep in from it. */
       from: number;
+      /** How active the aurora is, 0 to 1, to hold it there (a preview in
+       * development); -1 to let it come and go. */
+      activity: number;
     }
   | { type: "site"; site: number }
   | { type: "size"; width: number; height: number; targets: PageTarget[] }
@@ -242,12 +254,33 @@ function decodeBase64(b64: string): Uint8Array {
 }
 
 /** Ridge strip: for each azimuth, the ridge direction, then the far shore
- * over water or a direction far below the frame. */
+ * over water or a direction far below the frame. Where water shows from
+ * land, a second strip after it: the near shore down to below the frame. */
 function ridgeMesh(skyline: Skyline): Float32Array {
   const elev = new Int16Array(decodeBase64(skyline.elev).buffer);
   const dist = new Uint16Array(decodeBase64(skyline.dist).buffer);
   const base = new Int16Array(decodeBase64(skyline.base).buffer);
-  const out = new Float32Array(elev.length * 8);
+  const near = skyline.near
+    ? new Int16Array(decodeBase64(skyline.near).buffer)
+    : null;
+  const out = new Float32Array(elev.length * (near ? 16 : 8));
+  near?.forEach((n, i) => {
+    const az = (skyline.from + i * skyline.step) * RAD;
+    for (const [j, el] of [
+      [0, (n / 100) * RAD],
+      [1, -40 * RAD],
+    ] as const) {
+      out.set(
+        [
+          Math.sin(az) * Math.cos(el),
+          Math.sin(el),
+          Math.cos(az) * Math.cos(el),
+          j ? -1 : 0,
+        ],
+        (elev.length + i) * 8 + j * 4,
+      );
+    }
+  });
   elev.forEach((e, i) => {
     const az = (skyline.from + i * skyline.step) * RAD;
     // 0 within 1 km of the viewer, rising to 1 at 31 km: paler, and lit if a city.
@@ -268,6 +301,47 @@ function ridgeMesh(skyline: Skyline): Float32Array {
     }
   });
   return out;
+}
+
+/** The skyline's elevation by azimuth as one row of texels for the water to
+ * mirror: two bytes each, -10° to 40°. At most `most` texels: a wider
+ * skyline keeps the highest of each run. The first azimuth and the span
+ * (radians) go with it. */
+function ridgeTexels(
+  skyline: Skyline,
+  most: number,
+): { data: Uint8Array; texels: number; from: number; span: number } {
+  const elev = new Int16Array(decodeBase64(skyline.elev).buffer);
+  const run = Math.ceil(elev.length / most);
+  const texels = Math.ceil(elev.length / run);
+  const data = new Uint8Array(texels * 4);
+  for (let i = 0; i < texels; i++) {
+    const top = Math.max(...elev.subarray(i * run, (i + 1) * run)) / 100;
+    const v = Math.round(Math.min(1, Math.max(0, (top + 10) / 50)) * 65535);
+    data.set([v >> 8, v & 255, 0, 255], i * 4);
+  }
+  return {
+    data,
+    texels,
+    from: skyline.from * RAD,
+    span: (texels - 1) * run * skyline.step * RAD,
+  };
+}
+
+/** How active the aurora is at t seconds, 0 (quiet arcs) to 1 (a
+ * substorm): mostly quiet, now and then a surge that builds over a minute
+ * or so and dies back. `seed` starts each load somewhere different. */
+function auroraActivity(seconds: number, seed: number): number {
+  const x = seconds / 75 + seed;
+  const i = Math.floor(x);
+  const f = x - i;
+  const [a, b] = [i, i + 1].map((n) => {
+    const v = Math.sin(n * 127.1) * 43758.5453;
+    return v - Math.floor(v);
+  });
+  const n = a! + (b! - a!) * f * f * (3 - 2 * f);
+  const s = Math.min(1, Math.max(0, (n - 0.62) / 0.3));
+  return s * s * (3 - 2 * s);
 }
 
 /** Catalogue records (see scripts/build-stars.mjs) to direction + magnitude. */
@@ -484,7 +558,8 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   const ravenProgram = compile(gl, RAVEN_VS, RAVEN_FS);
   const ravenBlit = compile(gl, RAVEN_BLIT_VS, RAVEN_BLIT_FS);
 
-  const [voidC, spring, cyan, teal, purple, ice] = parseColours(init.colours);
+  const [voidC, spring, cyan, teal, purple, ice, green, red, fringe] =
+    parseColours(init.colours);
   const colours: Record<string, Rgb | undefined> = {
     uVoid: voidC,
     uSpring: spring,
@@ -492,6 +567,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     uTeal: teal,
     uPurple: purple,
     uIce: ice,
+    uAuroraGreen: green,
+    uAuroraRed: red,
+    uAuroraFringe: fringe,
   };
   // Footprint texture and framebuffer on unit 0.
   const map = gl.createTexture();
@@ -612,7 +690,14 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     Float32Array.from({ length: SPARKS * 4 }, Math.random),
   );
   const ridgeBuf = gl.createBuffer();
+  // Vertices in the ridge strip, and in the near shore's strip after it.
   let ridgeCount = 0;
+  let nearCount = 0;
+  // The skyline for the water to mirror, on unit 3: first azimuth, span and
+  // texels (0 for none).
+  const ridgeTex = gl.createTexture();
+  let ridgeSpan: [number, number, number] = [0, 0, 0];
+  const mostTexels = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
   const planetBuf = gl.createBuffer();
   let starBuf: WebGLBuffer | null = null;
   let starCount = 0;
@@ -628,6 +713,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     gl.uniform1i(gl.getUniformLocation(program, "uMap"), 0);
     gl.uniform1i(gl.getUniformLocation(program, "uMoonTex"), 1);
     gl.uniform1i(gl.getUniformLocation(program, "uRaven"), 2);
+    gl.uniform1i(gl.getUniformLocation(program, "uRidge"), 3);
   }
   for (const p of [foot, skyProgram, sparks, stars, ridge]) setFixedUniforms(p);
   if (ravenProgram && ravenBlit)
@@ -931,7 +1017,28 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     ridgeAt = ridgeFor(site);
     gl.bindBuffer(gl.ARRAY_BUFFER, ridgeBuf);
     gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
-    ridgeCount = mesh.length / 4;
+    nearCount = skyline?.near ? mesh.length / 8 : 0;
+    ridgeCount = mesh.length / 4 - nearCount;
+    ridgeSpan = [0, 0, 0];
+    if (skyline) {
+      const row = ridgeTexels(skyline, mostTexels);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, ridgeTex);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        row.texels,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        row.data,
+      );
+      setTextureParams(gl.NEAREST, gl.CLAMP_TO_EDGE);
+      gl.activeTexture(gl.TEXTURE0);
+      ridgeSpan = [row.from, row.span, row.texels];
+    }
   }
   let width = init.width;
   let height = init.height;
@@ -945,6 +1052,16 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   let still = init.still;
   let hidden = init.hidden;
   let t = 120;
+  // How active the aurora is now, and the faster clock its rays run on.
+  const activitySeed = Math.random() * 1000;
+  let activity = 0;
+  let fastT = t;
+  function updateActivity(dt: number): void {
+    activity =
+      init.activity >= 0 ? init.activity : auroraActivity(t, activitySeed);
+    fastT += dt * (1 + 3 * activity);
+  }
+  updateActivity(0);
   let raf = 0;
   let last = 0;
   let samples = 0;
@@ -1208,6 +1325,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       gl.uniformMatrix3fv(uniformLocation(program, "uCam"), false, cam);
       gl.uniform2fv(uniformLocation(program, "uTan"), tan);
       gl.uniform1f(uniformLocation(program, "uT"), t);
+      gl.uniform1f(uniformLocation(program, "uAct"), activity);
+      gl.uniform1f(uniformLocation(program, "uFastT"), fastT);
+      gl.uniform3fv(uniformLocation(program, "uRidgeSpan"), ridgeSpan);
       gl.uniform1f(uniformLocation(program, "uPx"), px);
       gl.uniform1f(uniformLocation(program, "uMoonlight"), now.moonlight);
       gl.uniform2fv(uniformLocation(program, "uTilt"), tilt);
@@ -1293,6 +1413,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     setViewUniforms(ridge);
     const r = bindAttribute(ridge, "aRidge", ridgeBuf, 4);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, ridgeCount);
+    if (nearCount) gl.drawArrays(gl.TRIANGLE_STRIP, ridgeCount, nearCount);
     gl.disableVertexAttribArray(r);
 
     // 5. The raven, in front of everything.
@@ -1428,6 +1549,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     if (last) {
       const dt = Math.min(elapsed, 100) / 1000;
       t += dt;
+      updateActivity(dt);
       bird.step(dt, currentRavenView());
       paintInWake(dt);
       adaptQuality(elapsed);
