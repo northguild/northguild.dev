@@ -13,6 +13,7 @@ source file and the GMT commit it was copied from.
 ## Token groups (`--gmt-*`)
 
 - Colour roles: `void`, `cyan`, `spring`, `teal`, `ice` (and `-dim`, `-bright` variants).
+- Aurora light, for the sky: `aurora-green`, `aurora-red`, `aurora-fringe`.
 - Surfaces and fills: `surface`, `fill`, `fill-subtle`, `fill-strong`, `glass-tint*`.
 - Lines: `border`, `border-strong`, `hairline`, `highlight`, `glow`.
 - Type: `font-mono`, `font-display`.

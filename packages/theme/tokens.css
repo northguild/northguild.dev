@@ -39,6 +39,14 @@
   --gmt-signal: #f5a524;
   --gmt-dst-gold: #fbbf24;
   --gmt-dst-purple: #c084fc;
+  /* The aurora's own light, for the sky behind the page (not from the GMT
+     palette): oxygen's green line (557.7 nm) that most aurora shows,
+     oxygen's red line (630 nm) atop tall rays, and the pink-magenta of
+     nitrogen along an active aurora's lower edge. As a camera records
+     them, so the brightest cores still wash out toward white. */
+  --gmt-aurora-green: #4dff88;
+  --gmt-aurora-red: #e8213c;
+  --gmt-aurora-fringe: #f04ab8;
 
   /* ---- Derived tokens ---- */
   --gmt-surface: #061018; /* elevated bg / nav / sidebar (was --mg-void-2) */
