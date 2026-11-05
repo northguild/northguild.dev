@@ -233,19 +233,21 @@ import { version as gmtVersion } from "../../node_modules/@northguild/gmt/packag
     const kind = el.dataset.ngTarget;
     return kind === "header" || kind === "card" ? kind : "text";
   }
-  // The card for the page this visit came back from: the one with a link to
-  // where that page sits ("/gmt/" for any of the GMT docs). -1 if none.
+  // The card for the page this visit came back from: the one whose docs sit
+  // above it on this site (`data-ng-path`, "/gmt/" for any of the GMT
+  // docs). Only the card's own docs path counts, not its other links, which
+  // may lead off the site. -1 if none.
   function cardCameFrom(): number {
     const path = page.dataset.ngFrom ?? "";
     if (!returning || !path) return -1;
-    return panes.findIndex(
-      (el) =>
+    return panes.findIndex((el) => {
+      const docs = el.dataset.ngPath ?? "";
+      return (
         el.dataset.ngTarget === "card" &&
-        [...el.querySelectorAll("a")].some((a) => {
-          const { pathname } = new URL(a.href);
-          return pathname.length > 1 && path.startsWith(pathname);
-        }),
-    );
+        docs.length > 1 &&
+        path.startsWith(docs)
+      );
+    });
   }
   function pageTargets(): PageTarget[] {
     if (!isAwaiting()) return [];
