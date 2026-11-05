@@ -216,6 +216,9 @@ function parseColours(values: string[]): Rgb[] {
   return values.map((value) => {
     if (!ctx) return [0, 0, 0];
     ctx.clearRect(0, 0, 1, 1);
+    // A missing token ("") leaves fillStyle as it was: start from black so
+    // it reads as no colour, not the token before it.
+    ctx.fillStyle = "#000";
     ctx.fillStyle = value;
     ctx.fillRect(0, 0, 1, 1);
     const [r = 0, g = 0, b = 0] = ctx.getImageData(0, 0, 1, 1).data;
@@ -1534,6 +1537,10 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   // frames lately (ms).
   let smooth = true;
   let paceMs = FLY_IN_FRAME_MS;
+  // Whether the last frame planned a new flight. Planning can take a few
+  // milliseconds on a slow phone, so the gap after it says nothing about
+  // whether frames keep up, and is left out of paceMs.
+  let planned = false;
   function onFrame(stamp: number): void {
     raf = nextFrame(onFrame);
     const elapsed = stamp - last;
@@ -1542,15 +1549,18 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     // 30.
     const fast = bird.entering && smooth && Math.hypot(...bird.position) < 15;
     if (elapsed < (fast ? FLY_IN_FRAME_MS : FRAME_MS) - 2) return;
-    if (fast && last && elapsed < 200) {
+    if (fast && last && elapsed < 200 && !planned) {
       paceMs = paceMs * 0.9 + elapsed * 0.1;
       if (paceMs > 22) smooth = false;
     }
+    planned = false;
     if (last) {
       const dt = Math.min(elapsed, 100) / 1000;
       t += dt;
       updateActivity(dt);
+      const flight = bird.flight;
       bird.step(dt, currentRavenView());
+      planned = !!bird.flight && bird.flight !== flight;
       paintInWake(dt);
       adaptQuality(elapsed);
     }
