@@ -1,19 +1,22 @@
 # @northguild/theme
 
-CSS only. Private; never published to a registry. Each file's header names its
-source file and the GMT commit it was copied from.
+CSS only. Private; never published to a registry. Each file copied from GMT
+names its source file and the GMT commit in its header. `tokens-aurora.css` is
+NorthGuild's own.
 
 ## Files
 
 - `tokens.css`: dark `:root` tokens and the Michroma `@font-face`.
 - `tokens-light.css`: the `[data-theme="light"]` overrides; omit for dark-only.
+- `tokens-aurora.css`: the aurora's colours for the sky (NorthGuild's own).
 - `primitives.css`: component recipes below.
 - `fonts/michroma-latin-400-normal.woff2`: the display font.
 
 ## Token groups (`--gmt-*`)
 
 - Colour roles: `void`, `cyan`, `spring`, `teal`, `ice` (and `-dim`, `-bright` variants).
-- Aurora light, for the sky: `aurora-green`, `aurora-red`, `aurora-fringe`.
+- Aurora light, for the sky: `aurora-green`, `aurora-red`, `aurora-fringe`,
+  in `tokens-aurora.css` (NorthGuild's own, not copied from GMT).
 - Surfaces and fills: `surface`, `fill`, `fill-subtle`, `fill-strong`, `glass-tint*`.
 - Lines: `border`, `border-strong`, `hairline`, `highlight`, `glow`.
 - Type: `font-mono`, `font-display`.

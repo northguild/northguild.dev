@@ -6,6 +6,7 @@
   "files": [
     "tokens.css",
     "tokens-light.css",
+    "tokens-aurora.css",
     "primitives.css",
     "fonts"
   ],
@@ -16,6 +17,7 @@
   "exports": {
     "./tokens.css": "./tokens.css",
     "./tokens-light.css": "./tokens-light.css",
+    "./tokens-aurora.css": "./tokens-aurora.css",
     "./primitives.css": "./primitives.css",
     "./fonts/*": "./fonts/*",
     "./package.json": "./package.json"

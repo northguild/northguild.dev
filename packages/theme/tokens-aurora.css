@@ -1,0 +1,15 @@
+/*
+ * NorthGuild's own tokens, not from the GMT palette: kept out of tokens.css,
+ * which is copied from GMT and would lose them when copied again.
+ *
+ * The aurora's light, for the sky behind the page: oxygen's green line
+ * (557.7 nm) that most aurora shows, oxygen's red line (630 nm) atop tall
+ * rays, and the pink-magenta of nitrogen along an active aurora's lower
+ * edge. As a camera records them, so the brightest cores still wash out
+ * toward white.
+ */
+:root {
+  --gmt-aurora-green: #4dff88;
+  --gmt-aurora-red: #e8213c;
+  --gmt-aurora-fringe: #f04ab8;
+}
