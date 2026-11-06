@@ -23,6 +23,7 @@ const links = [
 
 <header
   class:list={["gmt-glass", "site-header", { "ng-enter-pane": entrance }]}
+  data-ng-target={entrance ? "header" : undefined}
 >
   <div class="wordmark"><NorthGuildMark />NorthGuild</div>
   <nav aria-label="NorthGuild community">
@@ -80,7 +81,15 @@ const links = [
     display: flex;
     gap: 1rem;
   }
+  /* The icons in the shield's quiet ice rather than the theme's cyan: grey
+     at rest, ice on hover or focus. The focus ring and its sonar ping stay
+     the theme's. */
   .gmt-icon-button {
+    color: var(--gmt-ice-dim);
     text-decoration: none;
+  }
+  .gmt-icon-button:hover,
+  .gmt-icon-button:focus-visible {
+    color: var(--gmt-ice);
   }
 </style>

@@ -18,13 +18,18 @@ precision highp float;
 #define MAP_H ${MAP_H}.0
 #define CURTAINS ${CURTAINS}
 uniform float uT;
+// How active the aurora is, 0 (quiet arcs) to 1 (a substorm), and a clock
+// that runs faster the more active it is, for the rays (see the worker).
+uniform float uAct, uFastT;
 uniform vec3 uSpring, uCyan, uPurple;
+// Emission colours: oxygen green and red, nitrogen's pink-magenta fringe.
+uniform vec3 uAuroraGreen, uAuroraRed, uAuroraFringe;
 // Ground shift per km of altitude along a field line (toward magnetic south).
 uniform vec2 uTilt;
 const float H0 = 100.0;   // lower border, km
 const float RE = 6371.0;  // Earth radius, km
 const float SIG = 8.0;    // sheet half-thickness (gaussian sigma), km
-float tt;
+float tt, ft;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
   vec2 i = floor(p), f = fract(p);
@@ -37,9 +42,10 @@ float noise(vec2 p) {
 uniform vec3 uC0, uC1;
 vec3 curtain(float k) { return k < 0.5 ? uC0 : uC1; }
 vec2 span(float k) { return curtain(k).yz; }
-// Ground distance north of the viewer: a base plus folds at three scales.
+// Ground distance north of the viewer: a base plus folds at three scales,
+// deeper while the aurora is active.
 float path(float x, float k) {
-  float s = 1.0 + 0.6 * k;
+  float s = (1.0 + 0.6 * k) * (1.0 + 0.6 * uAct);
   float z = curtain(k).x;
   z += 90.0 * s * (noise(vec2(x / 420.0 + k * 7.0, tt * 0.0012 + k)) - 0.5);
   z += 35.0 * s * (noise(vec2(x / 140.0 + k * 3.0, tt * 0.003 + 2.0 * k)) - 0.5);
@@ -53,28 +59,35 @@ float lit(float x, float k) {
   return 0.08 + 0.92 * smoothstep(0.38, 0.62, n);
 }
 float knots(float x, float k) {
-  return 0.45 + 0.55 * noise(vec2(x / 55.0 + tt * 0.004, k * 5.0 + tt * 0.01));
+  return 0.45 + 0.55 * noise(vec2(x / 55.0 + ft * 0.004, k * 5.0 + ft * 0.01));
 }
-// How rayed (rather than smooth) this stretch of the arc is.
+// How rayed (rather than smooth) this stretch of the arc is: quiet arcs are
+// mostly smooth; an active aurora breaks into rays along most of its length.
 float rayed(float x, float k) {
-  return smoothstep(0.3, 0.7, noise(vec2(x / 180.0 + k * 4.0, tt * 0.003 + k)));
+  float a = 0.25 * uAct;
+  return smoothstep(0.3 - a, 0.7 - a,
+    noise(vec2(x / 180.0 + k * 4.0, tt * 0.003 + k)));
 }
-// Fine striations along the arc, drifting about 0.5 km/s.
+// Fine striations along the arc, drifting about 0.5 km/s when quiet and
+// racing along it when active.
 float rays(float x, float k, float c) {
-  float r = 0.6 * noise(vec2(x / 3.5 + tt * 0.15, k * 13.0 + tt * 0.02))
-    + 0.4 * noise(vec2(x / 1.6 - tt * 0.1, k * 17.0));
+  float r = 0.6 * noise(vec2(x / 3.5 + ft * 0.15, k * 13.0 + ft * 0.02))
+    + 0.4 * noise(vec2(x / 1.6 - ft * 0.1, k * 17.0));
   return mix(1.0, r * 1.4, c);
 }
 float rayHeight(float x, float k) {
   return rayed(x, k) * (0.3 + 0.7 * noise(vec2(x / 90.0 + k, tt * 0.002)));
 }
-// Colour by altitude: bright spring-cyan at the border, cyan to blue above,
-// faint purple at the top.
+// Colour by altitude, as the emissions are. Oxygen's green from the lower
+// border to about 200 km, where the air is too thin for it; above that,
+// oxygen's red, faint and slow, so it shows mostly atop tall rays (the sheet
+// fades with height; see profile). While the aurora is active, nitrogen's
+// pink-magenta along the lower edge, which then dips a little lower.
 vec3 ramp(float h) {
-  vec3 blue = mix(uCyan, uPurple, 0.5);
-  vec3 c = mix(mix(uSpring, uCyan, 0.55), uCyan, smoothstep(100.0, 125.0, h));
-  c = mix(c, blue, smoothstep(125.0, 180.0, h));
-  return mix(c, uPurple, smoothstep(180.0, 260.0, h));
+  float green = 1.0 - smoothstep(170.0, 240.0, h);
+  float red = 2.5 * smoothstep(160.0, 250.0, h) * (0.35 + 0.65 * uAct);
+  float fringe = 1.6 * uAct * (1.0 - smoothstep(97.0, 106.0, h));
+  return uAuroraGreen * green + uAuroraRed * red + uAuroraFringe * fringe;
 }
 `;
 
@@ -91,6 +104,7 @@ export const FOOT_FS = `${COMMON}
 varying vec2 vUv;
 void main() {
   tt = uT;
+  ft = uFastT;
   float row = floor(vUv.y * MAP_H);
   float k = floor(row / 2.0);
   vec2 sp = span(k);
@@ -124,6 +138,10 @@ uniform vec2 uShadowR;    // umbra and penumbra radii, moon radii
 uniform float uMoonlight;
 uniform float uGlow;      // city light near the horizon, 0..1
 uniform float uLights;    // lit windows and streets, 0..1
+// The skyline's elevation by azimuth, two bytes a texel (see the worker):
+// first azimuth and span (radians), and texels (0 for no skyline).
+uniform sampler2D uRidge;
+uniform vec3 uRidgeSpan;
 varying vec2 vUv;
 const float H1 = ${top}.0;
 const float PI = 3.14159265;
@@ -151,8 +169,24 @@ float fetchCoarse(float x, float k) {
   return c * c;
 }
 // Sharp lower border, then an exponential tail whose height grows with g.
+// An active aurora reaches a little deeper.
 float profile(float h, float g) {
-  return smoothstep(94.0, 106.0, h) * exp(-max(h - 106.0, 0.0) / (25.0 + 45.0 * g));
+  return smoothstep(94.0 - 4.0 * uAct, 106.0, h)
+    * exp(-max(h - 106.0, 0.0) / (25.0 + 45.0 * g));
+}
+// The sine of the skyline's elevation at azimuth az (radians), or -1 where
+// there is none. Two fetches and a manual lerp: the two-byte value cannot
+// be filtered.
+float ridgeSine(float az) {
+  if (uRidgeSpan.z < 2.0) return -1.0;
+  float u = (az - uRidgeSpan.x) / uRidgeSpan.y * (uRidgeSpan.z - 1.0);
+  if (u < 0.0 || u > uRidgeSpan.z - 1.0) return -1.0;
+  float i = floor(u), f = u - i;
+  vec4 a = texture2D(uRidge, vec2((i + 0.5) / uRidgeSpan.z, 0.5));
+  vec4 b = texture2D(uRidge, vec2((i + 1.5) / uRidgeSpan.z, 0.5));
+  float ea = (a.r * 255.0 * 256.0 + a.g * 255.0) / 65535.0;
+  float eb = (b.r * 255.0 * 256.0 + b.g * 255.0) / 65535.0;
+  return sin(radians(mix(ea, eb, f) * 50.0 - 10.0));
 }
 // Earth's shadow on the moon: how far the surface point n (moon radii from
 // its centre) is from the shadow's axis, and the sunlight left there
@@ -291,10 +325,16 @@ vec3 skyColour(vec3 rd, float j) {
   }
   float e = max(rd.y, 0.0);
   float air = exp(-0.12 * (1.0 / (e + 0.04) - 1.0));
-  vec3 col = uVoid + uTeal * 0.05 * exp(-e * 8.0)
+  // Airglow: oxygen's green again, from the whole sky at about 95 km. Seen
+  // edge-on it is a faint band some ten degrees above the horizon.
+  float band = (e - 0.17) / 0.12;
+  vec3 col = uVoid + uTeal * 0.03 * exp(-e * 8.0)
+    + uAuroraGreen * 0.006 * exp(-band * band)
     + uGlow * (uTeal * 0.09 * exp(-e * 9.0) + uIce * 0.035 * exp(-e * 22.0))
     + uMoonlight * (uIce * 0.02 + uTeal * 0.05) * (0.5 + 0.5 * exp(-e * 3.0));
-  return col + (acc * 0.035 + moon(rd) + sun(rd)) * air;
+  // Quiet arcs are faint; a surge is several times brighter.
+  float bright = 0.6 + 1.2 * uAct;
+  return col + (acc * 0.035 * bright + moon(rd) + sun(rd)) * air;
 }
 // City lights along the shore, by azimuth bin: on or off, and how bright.
 float shoreLight(float az) {
@@ -312,15 +352,24 @@ void main() {
   if (rd.y >= 0.0) {
     col = skyColour(rd, j);
   } else {
-    // Water: the sky mirrored and broken by slow ripples that crowd toward
-    // the horizon; strongest at grazing angles (Fresnel).
+    // Water: a mirror of what is above it, broken by slow ripples that
+    // crowd together toward the far shore. Each ripple tilts the surface a
+    // little, so its reflection comes from a little higher or lower in the
+    // sky (twice the tilt: a degree or two on a quiet night). Below the
+    // skyline it mirrors the mountains or the city, dark; above, the aurora,
+    // strongest at grazing angles (Fresnel). Across a fjord with mountains
+    // on the far side, the aurora shows mostly as glints where a ripple
+    // tilts enough to catch it.
     float d = -rd.y;
     float az = atan(rd.x, rd.z);
     vec2 q = vec2(az * 700.0, 0.06 / d);
     float w = noise(q + vec2(0.0, uT * 0.35)) + 0.5 * noise(q * 2.3 - vec2(0.0, uT * 0.25)) - 0.75;
-    vec3 rr = normalize(vec3(rd.x, d * max(0.15, 1.0 + 0.9 * w), rd.z));
+    vec3 rr = normalize(vec3(rd.x, max(0.0005, d + 0.045 * w), rd.z));
     float fresnel = 0.02 + 0.98 * pow(1.0 - d, 5.0);
-    col = uVoid * 0.5 + skyColour(rr, j) * fresnel * 0.85;
+    vec3 above = rr.y < ridgeSine(az)
+      ? uVoid * 0.45 + uIce * 0.02 * uMoonlight
+      : skyColour(rr, j);
+    col = uVoid * 0.5 + above * fresnel * 0.85;
     // City lights stretched into broken vertical streaks.
     float streak = shoreLight(az + w * 0.0004) * exp(-d * 45.0)
       * smoothstep(0.35, 0.75, noise(vec2(az * 900.0, d * 260.0 - uT * 0.6)));
@@ -358,6 +407,7 @@ void main() {
   vec2 sp = span(k);
   float x0 = sp.x + (aSeed.x * 2.0 - 1.0) * sp.y * 0.9;
   float lift = 1.0 + 12.0 * pow(fract(aSeed.w * 13.7), 2.0);
+  ft = uFastT;
   tt = uT + (0.4 - ph) * life;
   float z0 = path(x0, k) + (fract(aSeed.w * 5.3) - 0.5) * 2.0 * SIG;
   float bright = lit(x0, k) * knots(x0, k);
@@ -369,7 +419,8 @@ void main() {
     + 0.03 * (h - hit) * vec2(cos(spin), sin(spin));
   vec4 c = project(vec3(g.x, h - dot(g, g) / (2.0 * RE), g.y));
   float glow = smoothstep(0.45, 0.65, ph) * (1.0 - smoothstep(0.75, 1.0, ph));
-  vCol = mix(uCyan, ramp(hit), glow) * 0.3 * glow * bright;
+  vCol = mix(uAuroraGreen, ramp(hit), glow) * 0.3 * glow * bright
+    * (0.6 + 1.2 * uAct);
   gl_PointSize = 1.3 * clamp(250.0 / max(c.w, 1.0), 0.6, 2.0) * uPx;
   gl_Position = c;
 }

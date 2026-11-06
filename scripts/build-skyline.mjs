@@ -3,7 +3,8 @@
 // trees and buildings), optionally adds OpenStreetMap building heights, and
 // keeps the highest elevation angle, allowing for Earth curvature and standard
 // refraction. Where the site looks over water it also records the far shore,
-// so the page can draw the water below it.
+// so the page can draw the water below it; from land, where water shows
+// between the far shore and a near one (a fjord below the town), both.
 // Writes apps/site/src/scripts/skylines/<site id>.ts.
 //
 // Run: node scripts/build-skyline.mjs [site id ...]   (default: all sites)
@@ -30,6 +31,7 @@ const FAR = 80_000;
 const BUILDINGS_FAR = 12_000; // OSM buildings beyond this are below a pixel
 const LAND = 1.5; // metres above sea level that count as land, not water
 const NO_SHORE = -40; // degrees: the strip runs below the frame
+const WATER_LEAST = 0.03; // degrees: thinner water seen from land is left out
 const R_EARTH = 6_371_000;
 const R_EFF = (R_EARTH * 7) / 6; // standard refraction
 const OUT = new URL("../apps/site/src/scripts/skylines/", import.meta.url);
@@ -246,10 +248,26 @@ async function build(site) {
   const best = new Float64Array(count).fill(-Infinity);
   const bestR = new Float64Array(count).fill(FAR);
   const shore = new Float64Array(count).fill(NO_SHORE / DEG);
+  // From land: the nearest shore of the water seen, or NO_SHORE.
+  const nearShore = new Float64Array(count).fill(NO_SHORE / DEG);
 
   for (let i = 0; i < count; i++) {
     const az = (from + i * AZ_STEP) / DEG;
     let landAt = 0;
+    // From land, the water seen (not hidden by nearer land): its nearest
+    // and farthest angles.
+    let [seaLow, seaHigh] = [Infinity, -Infinity];
+    // Water inside the first stretch counts too, from just past the viewer:
+    // its houses and walls are left out of the skyline, so they hide none
+    // of it either.
+    for (let r = 20; !site.water && r < near; r += 10) {
+      const lat = site.lat + (r * Math.cos(az) * DEG) / R_EARTH;
+      const lon =
+        site.lon + (r * Math.sin(az) * DEG) / (R_EARTH * Math.cos(latRad));
+      if (terrainHeight(lat, lon) <= LAND) {
+        seaLow = Math.min(seaLow, elevationAngle(0, r));
+      }
+    }
     // Step grows with distance: 15 m near, about 130 m far.
     for (let r = near; r <= FAR; r += Math.max(15, r / 600)) {
       const lat = site.lat + (r * Math.cos(az) * DEG) / R_EARTH;
@@ -258,6 +276,10 @@ async function build(site) {
       const z = terrainHeight(lat, lon);
       if (!landAt && z > LAND) landAt = r;
       const angle = elevationAngle(z, r);
+      if (!site.water && z <= LAND && angle > best[i]) {
+        seaLow = Math.min(seaLow, angle);
+        seaHigh = Math.max(seaHigh, angle);
+      }
       if (angle > best[i]) {
         best[i] = angle;
         bestR[i] = r;
@@ -266,6 +288,13 @@ async function build(site) {
     // Over water the strip stops at the first land, however near: the
     // island's own shore curves down toward the frame.
     if (site.water && landAt) shore[i] = elevationAngle(0, landAt);
+    // From land, a strip of water worth drawing (a few hundredths of a
+    // degree at least) splits the strip: the far shore above it, the near
+    // shore below.
+    if (seaHigh - seaLow >= WATER_LEAST / DEG) {
+      shore[i] = seaHigh;
+      nearShore[i] = seaLow;
+    }
   }
 
   if (site.buildings) {
@@ -368,6 +397,8 @@ async function build(site) {
     Math.min(65535, Math.round(r / 10)),
   );
   const base = Int16Array.from(shore, (a) => Math.round(a * DEG * 100));
+  const nearBase = Int16Array.from(nearShore, (a) => Math.round(a * DEG * 100));
+  const seesWater = !site.water && nearBase.some((a) => a > NO_SHORE * 100);
 
   function toBase64(a) {
     return Buffer.from(a.buffer).toString("base64");
@@ -378,13 +409,19 @@ async function build(site) {
 // ${site.name}: ${site.lat} N, ${site.lon} E, eye ${site.eye} m above ground (${h0.toFixed(1)} m).
 // elev: Int16 little-endian, hundredths of a degree above the horizontal.
 // dist: Uint16 little-endian, tens of metres to the ridge.
-// base: Int16, hundredths of a degree: the far shore over water, or ${NO_SHORE}°.
+// base: Int16, hundredths of a degree: the far shore over water, or ${NO_SHORE}°.${
+      seesWater
+        ? `
+// near: Int16, hundredths of a degree: the near shore of the water seen
+// from land, or ${NO_SHORE}°.`
+        : ""
+    }
 export const SKYLINE = {
   from: ${from},
   step: ${AZ_STEP},
   elev: "${toBase64(elev)}",
   dist: "${toBase64(dist)}",
-  base: "${toBase64(base)}",
+  base: "${toBase64(base)}",${seesWater ? `\n  near: "${toBase64(nearBase)}",` : ""}
 };
 `,
   );
@@ -398,7 +435,8 @@ export const SKYLINE = {
     const i = Math.round((az - from) / AZ_STEP);
     console.log(
       `  ${String(az).padStart(4)}°  ${deg[i].toFixed(2).padStart(6)}°  ` +
-        `${(dist[i] / 100).toFixed(1).padStart(5)} km  shore ${(base[i] / 100).toFixed(2)}°`,
+        `${(dist[i] / 100).toFixed(1).padStart(5)} km  shore ${(base[i] / 100).toFixed(2)}°` +
+        (seesWater ? `  near shore ${(nearBase[i] / 100).toFixed(2)}°` : ""),
     );
   }
 }
