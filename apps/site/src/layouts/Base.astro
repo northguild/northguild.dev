@@ -11,11 +11,19 @@ interface Props {
       with `.ng-enter-*`, so a page that sets this should stagger them after
       it. */
   entrance?: boolean;
+  /** Structured data for the page, written as one JSON-LD script. */
+  jsonLd?: object;
+  /** Keeps the page out of search results: writes a robots `noindex` and
+      no canonical link, so the address cannot be indexed through its
+      canonical either. */
+  noindex?: boolean;
 }
 const {
   title,
   description = "NorthGuild: open-source tools for developers.",
   entrance = false,
+  jsonLd,
+  noindex = false,
 } = Astro.props;
 
 // Social cards need absolute URLs.
@@ -33,7 +41,16 @@ const ogAlt =
     <meta name="color-scheme" content="dark" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <link rel="canonical" href={pageUrl} />
+    {noindex && <meta name="robots" content="noindex" />}
+    {!noindex && <link rel="canonical" href={pageUrl} />}
+    {
+      jsonLd && (
+        <script
+          type="application/ld+json"
+          set:html={JSON.stringify(jsonLd).replace(/</g, "\\u003c")}
+        />
+      )
+    }
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="NorthGuild" />
     <meta property="og:title" content={title} />
