@@ -5,10 +5,6 @@ import sitemap from "@astrojs/sitemap";
 export default defineConfig({
   site: "https://northguild.dev",
   output: "static",
-  // The 404 page is not a page to list.
-  integrations: [
-    sitemap({
-      filter: (page) => !/\/404\/?$/.test(new URL(page).pathname),
-    }),
-  ],
+  // @astrojs/sitemap leaves the 404 and 500 pages out of the sitemap itself.
+  integrations: [sitemap()],
 });
