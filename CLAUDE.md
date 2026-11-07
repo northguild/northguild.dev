@@ -31,4 +31,5 @@ and rewriting published history have to be asked for by name.
 - No left-border-only accents on cards; use a full border or a bottom border.
 - Colours come from `@northguild/theme` tokens. Amber is not used here.
 - `apps/site` must not extend `tsconfig.base.json`; it extends `astro/tsconfigs/strict`.
-- One `robots.txt` serves the whole host, including `/gmt/`. Keep it exactly as is.
+- One `robots.txt` serves the whole host, including `/gmt/`. Keep every existing line,
+  `Content-Signal` included. Add a line only for a new sitemap or a path crawlers should skip.

@@ -201,7 +201,9 @@ function siteForTimeZone(): number {
 
 /** A frame on a timer, where the worker has no requestAnimationFrame. */
 function nextFrameByTimer(cb: FrameRequestCallback): number {
-  return setTimeout(() => cb(performance.now()), FRAME_MS);
+  // `self.` keeps the type a number; the bare call is Node's `Timeout` once
+  // `@types/node` is installed.
+  return self.setTimeout(() => cb(performance.now()), FRAME_MS);
 }
 
 const nextFrame =
