@@ -3,6 +3,8 @@
 **Read before writing or reviewing code:**
 [context/coding-standards.md](./context/coding-standards.md).
 
+The share card and its `?v=` rule: [context/share-card.md](./context/share-card.md).
+
 ## Git — read before any `git` or `gh` command
 
 **Default: never stage, commit, branch, push or open a PR on your own
