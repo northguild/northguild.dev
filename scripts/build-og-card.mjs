@@ -95,7 +95,7 @@ function luminance(r, g, b) {
 }
 
 /** A small seeded generator, so the stars are the same on every run. */
-function seeded(seed) {
+function seededRandom(seed) {
   let a = seed >>> 0;
   return function next() {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -121,7 +121,7 @@ async function cleanSky() {
   const x1 = 1114;
   const y0 = 128;
   const y1 = 502;
-  function at(x, y, c) {
+  function channelAt(x, y, c) {
     return px[(y * W + x) * 4 + c];
   }
   /** Each value replaced by the mean of its neighbours within `radius`. */
@@ -139,26 +139,38 @@ async function cleanSky() {
       return sum / n;
     });
   }
-  function line(count, get) {
+  function sampleLine(count, get) {
     return Array.from({ length: count }, function sample(_, i) {
       return get(i);
     });
   }
   const edges = [0, 1, 2].map((c) => ({
     top: smooth(
-      line(x1 - x0 + 1, (i) => (at(x0 + i, y0, c) + at(x0 + i, y0 - 1, c)) / 2),
+      sampleLine(
+        x1 - x0 + 1,
+        (i) => (channelAt(x0 + i, y0, c) + channelAt(x0 + i, y0 - 1, c)) / 2,
+      ),
       9,
     ),
     bottom: smooth(
-      line(x1 - x0 + 1, (i) => (at(x0 + i, y1, c) + at(x0 + i, y1 + 1, c)) / 2),
+      sampleLine(
+        x1 - x0 + 1,
+        (i) => (channelAt(x0 + i, y1, c) + channelAt(x0 + i, y1 + 1, c)) / 2,
+      ),
       9,
     ),
     left: smooth(
-      line(y1 - y0 + 1, (j) => (at(x0, y0 + j, c) + at(x0 - 1, y0 + j, c)) / 2),
+      sampleLine(
+        y1 - y0 + 1,
+        (j) => (channelAt(x0, y0 + j, c) + channelAt(x0 - 1, y0 + j, c)) / 2,
+      ),
       9,
     ),
     right: smooth(
-      line(y1 - y0 + 1, (j) => (at(x1, y0 + j, c) + at(x1 + 1, y0 + j, c)) / 2),
+      sampleLine(
+        y1 - y0 + 1,
+        (j) => (channelAt(x1, y0 + j, c) + channelAt(x1 + 1, y0 + j, c)) / 2,
+      ),
       9,
     ),
   }));
@@ -184,7 +196,7 @@ async function cleanSky() {
     }
   }
   // A few stars where the old card's were painted out; the same each run.
-  const random = seeded(20260511);
+  const random = seededRandom(20260511);
   for (let n = 0; n < 70; n++) {
     const x = Math.round(x0 + 4 + random() * (x1 - x0 - 8));
     const y = Math.round(y0 + 4 + random() * (y1 - y0 - 8));
@@ -387,7 +399,7 @@ const contrast = {
 canvas.save();
 canvas.translate(CENTER - shieldWidth / 2, shieldY);
 canvas.scale(shieldWidth / SHIELD.w, shieldHeight / SHIELD.h);
-function path(d) {
+function pathFromSvg(d) {
   return CanvasKit.Path.MakeFromSVGString(d);
 }
 function fill(d, shader, alpha = 1) {
@@ -395,12 +407,12 @@ function fill(d, shader, alpha = 1) {
   p.setAntiAlias(true);
   p.setShader(shader);
   p.setAlphaf(alpha);
-  const shape = path(d);
+  const shape = pathFromSvg(d);
   canvas.drawPath(shape, p);
   shape.delete();
   p.delete();
 }
-function gradient(c, from, to, x2, y2) {
+function linearGradient(c, from, to, x2, y2) {
   return CanvasKit.Shader.MakeLinearGradient(
     [0, 0],
     [x2, y2],
@@ -409,9 +421,9 @@ function gradient(c, from, to, x2, y2) {
     CanvasKit.TileMode.Clamp,
   );
 }
-fill(SHIELD.outline, gradient(ICE, 0.2, 0.03, 0, SHIELD.h));
-fill(SHIELD.lit, gradient(ICE, 0.14, 0, SHIELD.w * 0.7, SHIELD.h * 0.7));
-fill(SHIELD.field, gradient(ICE, 0.2, 0.03, 0, SHIELD.h));
+fill(SHIELD.outline, linearGradient(ICE, 0.2, 0.03, 0, SHIELD.h));
+fill(SHIELD.lit, linearGradient(ICE, 0.14, 0, SHIELD.w * 0.7, SHIELD.h * 0.7));
+fill(SHIELD.field, linearGradient(ICE, 0.2, 0.03, 0, SHIELD.h));
 // Hairlines are one device pixel, so divide by the scale.
 function stroke(d, color, alpha, widthPx, cap = true) {
   const p = new CanvasKit.Paint();
@@ -421,7 +433,7 @@ function stroke(d, color, alpha, widthPx, cap = true) {
   p.setStrokeJoin(CanvasKit.StrokeJoin.Round);
   if (cap) p.setStrokeCap(CanvasKit.StrokeCap.Round);
   p.setColor(rgba(color, alpha));
-  const shape = path(d);
+  const shape = pathFromSvg(d);
   canvas.drawPath(shape, p);
   shape.delete();
   p.delete();
