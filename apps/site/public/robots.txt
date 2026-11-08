@@ -7,3 +7,4 @@ Disallow: /gmt/api/
 
 Sitemap: https://northguild.dev/sitemap-index.xml
 Sitemap: https://northguild.dev/gmt/sitemap-index.xml
+Sitemap: https://northguild.dev/worktree/sitemap-index.xml

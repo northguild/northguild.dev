@@ -26,9 +26,11 @@ const {
   noindex = false,
 } = Astro.props;
 
-// Social cards need absolute URLs.
+// Social cards need absolute URLs. The image URL carries the card's hash
+// (astro.config.mjs), so a new card gets a new address and platforms that
+// cache by URL (Facebook, LinkedIn) fetch it again.
 const pageUrl = new URL(Astro.url.pathname, Astro.site);
-const ogImage = new URL("/og.png", Astro.site);
+const ogImage = new URL(`/og.png?v=${__OG_CARD_HASH__}`, Astro.site);
 const ogAlt =
   "NorthGuild: open-source tools for developers, under the northern lights.";
 ---
@@ -53,6 +55,7 @@ const ogAlt =
     }
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="NorthGuild" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={pageUrl} />
