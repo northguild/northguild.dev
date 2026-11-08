@@ -34,7 +34,8 @@ dependencies.
 ## The `?v=` rule
 
 `Base.astro` ends `og:image` and `twitter:image` in `?v=` plus the first 12 hex digits of the
-SHA-256 of `public/og.png`, read at build time. Platforms such as Facebook and LinkedIn cache
+SHA-256 of `public/og.png`. `astro.config.mjs` hashes the file once per build and hands the
+value to `Base.astro` as `__OG_CARD_HASH__`. Platforms such as Facebook and LinkedIn cache
 a card by URL, so a new card needs a new URL. Change the card, rebuild, and the address
 changes by itself; never edit the hash by hand. After a deploy, ask each platform's debugger
 to scrape the page again.

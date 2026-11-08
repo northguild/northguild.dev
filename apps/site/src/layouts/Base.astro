@@ -1,7 +1,4 @@
 ---
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import "@northguild/theme/tokens.css";
 import "@northguild/theme/primitives.css";
 import fontUrl from "@northguild/theme/fonts/michroma-latin-400-normal.woff2?url";
@@ -29,16 +26,11 @@ const {
   noindex = false,
 } = Astro.props;
 
-// Social cards need absolute URLs. The image URL carries the first 12 hex
-// digits of the file's SHA-256, so a new card gets a new address and
-// platforms that cache by URL (Facebook, LinkedIn) fetch it again. Astro runs
-// from apps/site, and the built page cannot find the file from its own URL.
+// Social cards need absolute URLs. The image URL carries the card's hash
+// (astro.config.mjs), so a new card gets a new address and platforms that
+// cache by URL (Facebook, LinkedIn) fetch it again.
 const pageUrl = new URL(Astro.url.pathname, Astro.site);
-const cardHash = createHash("sha256")
-  .update(readFileSync(join(process.cwd(), "public/og.png")))
-  .digest("hex")
-  .slice(0, 12);
-const ogImage = new URL(`/og.png?v=${cardHash}`, Astro.site);
+const ogImage = new URL(`/og.png?v=${__OG_CARD_HASH__}`, Astro.site);
 const ogAlt =
   "NorthGuild: open-source tools for developers, under the northern lights.";
 ---

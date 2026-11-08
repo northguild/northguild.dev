@@ -15,7 +15,7 @@
 // - the shield: the paths of apps/site/src/components/NorthGuildMark.astro.
 // - the wordmark and the line: Michroma (SIL OFL), scripts/fonts/Michroma-Regular.ttf, the
 //   same font @northguild/theme ships as woff2.
-// - colours: --gmt-ice, --gmt-ice-dim, --gmt-cyan, --gmt-cyan-bright and --gmt-void of
+// - colours: --gmt-ice, --gmt-ice-dim, --gmt-cyan and --gmt-void of
 //   @northguild/theme, as RGB triples.
 //
 // Run: node scripts/build-og-card.mjs   (by hand, never in the build; needs sharp and
@@ -48,7 +48,6 @@ const VOID = [3, 8, 12];
 const ICE = [207, 234, 242];
 const ICE_DIM = [152, 178, 190];
 const CYAN = [34, 211, 238];
-const CYAN_BRIGHT = [103, 232, 249];
 
 /** The shield's shapes, from NorthGuildMark.astro, in a 1000 by 1317 box. */
 const SHIELD = {
@@ -214,14 +213,11 @@ function rgba(c, a = 1) {
   return CanvasKit.Color(c[0], c[1], c[2], a);
 }
 
-function paragraph(text, size, { gradient, color }) {
-  const foreground = new CanvasKit.Paint();
-  foreground.setAntiAlias(true);
+function paragraph(text, size, color) {
   const style = new CanvasKit.ParagraphStyle({
     textAlign: CanvasKit.TextAlign.Center,
     textStyle: {
       color: rgba(color),
-      foregroundColor: gradient ? foreground : undefined,
       fontFamilies: ["Michroma"],
       fontSize: size,
       heightMultiplier: 1.2,
@@ -232,16 +228,15 @@ function paragraph(text, size, { gradient, color }) {
   const built = builder.build();
   builder.delete();
   built.layout(2000);
-  return { built, foreground };
+  return built;
 }
 
 /** The largest whole size at which `text` is no wider than `width`. */
 function fitSize(text, width, max, min) {
   for (let size = max; size >= min; size--) {
-    const { built, foreground } = paragraph(text, size, { color: ICE });
+    const built = paragraph(text, size, ICE);
     const w = built.getLongestLine();
     built.delete();
-    foreground.delete();
     if (w <= width) return size;
   }
   throw new Error(`"${text}" does not fit ${width}px`);
@@ -251,13 +246,12 @@ const wordmarkSize = fitSize(WORDMARK, TEXT_WIDTH, 120, 40);
 const lineSize = fitSize(LINE, TEXT_WIDTH, 40, 14);
 
 function measure(text, size) {
-  const { built, foreground } = paragraph(text, size, { color: ICE });
+  const built = paragraph(text, size, ICE);
   const out = {
     width: built.getLongestLine(),
     height: built.getHeight(),
   };
   built.delete();
-  foreground.delete();
   return out;
 }
 const wm = measure(WORDMARK, wordmarkSize);
@@ -384,12 +378,8 @@ const lineBox = {
   width: ln.width,
   height: ln.height,
 };
-// The wordmark fades from ice to bright cyan; the dimmer end is the one to measure.
-const wordmarkWorst = [CYAN_BRIGHT, ICE].sort(
-  (a, b) => luminance(...a) - luminance(...b),
-)[0];
 const contrast = {
-  wordmark: worstContrast(wordmarkBox, wordmarkWorst),
+  wordmark: worstContrast(wordmarkBox, ICE),
   line: worstContrast(lineBox, ICE_DIM),
 };
 
@@ -443,22 +433,12 @@ stroke(SHIELD.glyph, ICE, 0.95, 36);
 canvas.restore();
 
 // Text.
-const wordmarkText = paragraph(WORDMARK, wordmarkSize, {
-  gradient: true,
-  color: ICE,
-});
-wordmarkText.foreground.setShader(
-  CanvasKit.Shader.MakeLinearGradient(
-    [wordmarkBox.x, 0],
-    [wordmarkBox.x + wm.width, 0],
-    [rgba(ICE), rgba(CYAN_BRIGHT)],
-    [0, 1],
-    CanvasKit.TileMode.Clamp,
-  ),
-);
-canvas.drawParagraph(wordmarkText.built, CENTER - 1000, wordmarkY);
-const lineText = paragraph(LINE, lineSize, { color: ICE_DIM });
-canvas.drawParagraph(lineText.built, CENTER - 1000, lineY);
+const wordmarkText = paragraph(WORDMARK, wordmarkSize, ICE);
+canvas.drawParagraph(wordmarkText, CENTER - 1000, wordmarkY);
+const lineText = paragraph(LINE, lineSize, ICE_DIM);
+canvas.drawParagraph(lineText, CENTER - 1000, lineY);
+wordmarkText.delete();
+lineText.delete();
 
 const pixels = Uint8Array.from(readBack());
 surface.dispose();
@@ -473,6 +453,12 @@ const png = await sharp(pixels, { raw: { width: W, height: H, channels: 4 } })
     compressionLevel: 9,
   })
   .toBuffer();
+// Check before writing, so a failing card never replaces the good one.
+if (contrast.wordmark < 4.5 || contrast.line < 4.5) {
+  throw new Error(
+    `a text falls below 4.5:1 (wordmark ${contrast.wordmark.toFixed(2)}, line ${contrast.line.toFixed(2)}); nothing written`,
+  );
+}
 writeFileSync(OUT_SITE, png);
 writeFileSync(OUT_UPLOAD, png);
 
@@ -486,6 +472,3 @@ console.log(
 console.log(
   `contrast: wordmark ${contrast.wordmark.toFixed(2)}, line ${contrast.line.toFixed(2)}`,
 );
-if (contrast.wordmark < 4.5 || contrast.line < 4.5) {
-  throw new Error("a text falls below 4.5:1");
-}
