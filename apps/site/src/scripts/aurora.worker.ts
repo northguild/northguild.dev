@@ -772,7 +772,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       // below the horizon, so up toward the top of the frame.
       ceiling: 0.3 + 0.55 * portrait,
       // Where the cards are, for every fly-in, so the one after a sky switch
-      // flies the same line as the first.
+      // dives through them too, from a new place along the top.
       cards: targets
         .filter((target) => target.kind === "card")
         .map((target) => onScreen(target.box)),
@@ -852,8 +852,9 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     const { kind, box } = targets[i]!;
     const from = targets[init.from];
     // Back from one of the cards' pages, the title and intro sweep in from
-    // that card. Otherwise his heading, or down the screen before he has
-    // moved far enough to take one.
+    // that card. Otherwise his heading: before he has moved far enough to
+    // take one, his line as he sets off (see plotPasses), or failing that
+    // down the screen.
     const way =
       kind === "text" && from
         ? directionBetween(from.box, box)
@@ -890,6 +891,22 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
     passesFor = flight;
     if (!flight) return;
     const [W, H] = [width || 1, height || 1];
+    // Until his heading is measured, take it from his line as he sets off:
+    // he may come in heading either way, and a box he reaches on his first
+    // frame sweeps in his way.
+    if (!seen) {
+      const ahead = flight.dist.findIndex((d) => d >= 1.5);
+      const from = project({ cam, tanY }, width, height, flight.points[0]!);
+      const to =
+        ahead > 0
+          ? project({ cam, tanY }, width, height, flight.points[ahead]!)
+          : null;
+      if (from && to) {
+        const [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+        const n = Math.hypot(dx, dy);
+        if (n > 0) heading = [dx / n, dy / n];
+      }
+    }
     const track = flight.points.map((p, j) => {
       if (flight.dist[j]! < flight.fadeIn) return null;
       const at = project({ cam, tanY }, width, height, p);
