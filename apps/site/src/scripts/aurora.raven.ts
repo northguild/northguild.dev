@@ -42,7 +42,8 @@ export type RavenView = {
    * of the page's cards. */
   ceiling: number;
   /** The page's cards on screen (-1 to 1, y up), in page order: the first
-   * fly-in dives through the first. Empty for the usual place. */
+   * fly-in dives through the first one on its way across. Empty for the
+   * usual place. */
   cards: ScreenBox[];
   /** The card for the page the visitor came back from, or null: the
    * homecoming starts out behind it. */
@@ -1160,7 +1161,6 @@ function besideLine(p: V, a: V, b: V, k: number): V {
  * background, or now and then circling back. */
 function entrance(view: RavenView, entry: number): Path {
   const { fwd, tanX, horizon, isInFrame, pointAtDepth } = frame(view);
-  const card = view.cards[0] ?? USUAL_CARD;
   const flourish = FLOURISHES[Math.floor(Math.random() * FLOURISHES.length)]!;
   const stoop = flourish === "stoop";
   const side = Math.random() < 0.5 ? -1 : 1;
@@ -1186,12 +1186,21 @@ function entrance(view: RavenView, entry: number): Path {
   const near = Math.max(randomBetween(1.25, 1.45), 1.2 / (2 * tanX * 0.5));
   const { at, way } = entryPoint(entry, near, view.tanY);
   const start = pointAtDepth(...at, near);
-  // He swoops down and away over the title and through the first card to
-  // the bottom of his dive, low over the water.
+  // He swoops down and away over the title and through the first card on
+  // his way across (on a wide screen the cards sit side by side, and the
+  // first may be behind him) to the bottom of his dive, low over the water.
+  // Only through the part of it ahead of him, so the swoop runs one way.
   const tall = horizon > -0.3;
+  const card =
+    view.cards.find((c) => (way > 0 ? c[2] > at[0] : c[0] < at[0])) ??
+    view.cards[0] ??
+    USUAL_CARD;
   const [x0, y0, x1, y1] = card;
+  const [ahead0, ahead1] =
+    way > 0 ? [Math.max(x0, at[0]), x1] : [x0, Math.min(x1, at[0])];
+  const [dipX0, dipX1] = ahead0 < ahead1 ? [ahead0, ahead1] : [x0, x1];
   const dip = lowPoint(
-    lerpNumber(x0, x1, randomBetween(0.3, 0.7)),
+    lerpNumber(dipX0, dipX1, randomBetween(0.3, 0.7)),
     tall
       ? lerpNumber(y0, y1, randomBetween(0.1, 0.4))
       : Math.max(horizon + 0.03, -0.85),
@@ -1558,7 +1567,8 @@ export function raven(
       : randomBetween(...timing.entrance);
   let entranceDue = true;
   let lastEntry: number | null = null;
-  // The fly-in; a first one in over a different edge from the last.
+  // The fly-in; a first one comes in at least ENTRY_APART along the top
+  // edge from where the last one did.
   function flyInPath(view: RavenView): Path {
     if (flyIn === "return") return homecoming(view);
     lastEntry = nextEntry(lastEntry);
