@@ -3,8 +3,8 @@
 // z north, the viewer's eye at the origin.
 //
 // The first flight is a fly-in: he comes in over the viewer's shoulder from
-// just past the top edge (at its left, middle or right) or either side,
-// close enough to fill a good part of the screen, glides out over the page,
+// just past the top edge, anywhere along it from left to right, close
+// enough to fill a good part of the screen, glides out over the page,
 // swoops low toward the far bottom corner and leaves, on out of frame or
 // into the distance, a little differently every time. His flight draws in
 // the page's header, title and cards (see aurora.worker.ts).
@@ -1056,45 +1056,35 @@ const USUAL_CARD: ScreenBox = [-0.62, -0.25, 0.62, 0.35];
 type Flourish = "swoop" | "roll" | "stoop" | "spiral" | "weave";
 const FLOURISHES: Flourish[] = ["swoop", "roll", "stoop", "spiral", "weave"];
 
-/** Where a fly-in comes in, close by over the viewer's shoulder: over the
- * top edge at its left, middle or right, or in from either side about
- * halfway up. */
-type Entry = "top-left" | "top" | "top-right" | "left" | "right";
-const ENTRIES: Entry[] = ["top-left", "top", "top-right", "left", "right"];
+/** How far along the top edge (-1 to 1) a fly-in may come in, and the least
+ * it moves from the last one's place, so two fly-ins running differ. */
+const ENTRY_SPAN = 0.85;
+const ENTRY_APART = 0.5;
 
-/** A way in other than the last one, so two fly-ins running do not repeat. */
-function nextEntry(last: Entry | null): Entry {
-  const choices = ENTRIES.filter((e) => e !== last);
-  return choices[Math.floor(Math.random() * choices.length)]!;
+/** Where along the top edge a fly-in comes in: anywhere from its left to
+ * its right, but not near where the last one did. */
+function nextEntry(last: number | null): number {
+  let x = randomBetween(-ENTRY_SPAN, ENTRY_SPAN);
+  for (let tries = 0; tries < 8 && last !== null; tries++) {
+    if (Math.abs(x - last) >= ENTRY_APART) break;
+    x = randomBetween(-ENTRY_SPAN, ENTRY_SPAN);
+  }
+  return x;
 }
 
-/** Where on screen (-1 to 1) a fly-in starts, `near` metres off: his middle
- * just past the edge, so that his wings are in view from the start and he
- * comes into it big on the screen. And which way across he then flies, 1
- * to the right and -1 to the left: away from the side he came in on. */
+/** Where on screen (-1 to 1) a fly-in starts, `near` metres off, coming in
+ * over the top edge at `x`: his middle just above the frame, so that his
+ * wings are in view from the start and he comes into it big on the screen.
+ * And which way across he then flies, 1 to the right and -1 to the left:
+ * toward the far side, or either way from near the middle. */
 function entryPoint(
-  entry: Entry,
+  x: number,
   near: number,
-  tanX: number,
   tanY: number,
 ): { at: [number, number]; way: number } {
-  const top = 1 + 0.4 / (near * tanY);
-  const side = 1 + 0.4 / (near * tanX);
-  switch (entry) {
-    case "top-left":
-      return { at: [randomBetween(-0.85, -0.65), top], way: 1 };
-    case "top-right":
-      return { at: [randomBetween(0.65, 0.85), top], way: -1 };
-    case "top":
-      return {
-        at: [randomBetween(-0.2, 0.2), top],
-        way: Math.random() < 0.5 ? -1 : 1,
-      };
-    case "left":
-      return { at: [-side, randomBetween(0.05, 0.5)], way: 1 };
-    case "right":
-      return { at: [side, randomBetween(0.05, 0.5)], way: -1 };
-  }
+  const way =
+    Math.abs(x) < 0.2 ? (Math.random() < 0.5 ? -1 : 1) : -Math.sign(x);
+  return { at: [x, 1 + 0.4 / (near * tanY)], way };
 }
 
 /** Which way a fly-in leaves after the swoop, taken the way he is flying
@@ -1163,12 +1153,12 @@ function besideLine(p: V, a: V, b: V, k: number): V {
   return addVectors(p, scaleVector(aside, k * Math.hypot(...d)));
 }
 
-/** The fly-in: from just past the top edge (left, middle or right) or
- * either side, close enough to fill a good part of the screen, a long swoop
- * down past the header and cards to low over the water toward the far
- * bottom corner, then away: on past the far side, rising out of frame,
- * into the background, or now and then circling back. */
-function entrance(view: RavenView, entry: Entry): Path {
+/** The fly-in: from just past the top edge at `entry` (-1 to 1 along it),
+ * close enough to fill a good part of the screen, a long swoop down past
+ * the header and cards to low over the water toward the far bottom corner,
+ * then away: on past the far side, rising out of frame, into the
+ * background, or now and then circling back. */
+function entrance(view: RavenView, entry: number): Path {
   const { fwd, tanX, horizon, isInFrame, pointAtDepth } = frame(view);
   const card = view.cards[0] ?? USUAL_CARD;
   const flourish = FLOURISHES[Math.floor(Math.random() * FLOURISHES.length)]!;
@@ -1189,12 +1179,13 @@ function entrance(view: RavenView, entry: Entry): Path {
     );
   }
 
-  // In over an edge, close over the viewer's shoulder, wings at full span,
-  // while still under 2 m off. Never wider than about half the screen (his
-  // span is 1.2 m), so on a narrow screen he comes in a little farther off.
+  // In over the top edge, close over the viewer's shoulder, wings at full
+  // span, while still under 2 m off. Never wider than about half the screen
+  // (his span is 1.2 m), so on a narrow screen he comes in a little farther
+  // off.
   const near = Math.max(randomBetween(1.25, 1.45), 1.2 / (2 * tanX * 0.5));
-  const { at, way } = entryPoint(entry, near, tanX, view.tanY);
-  const start = keepAboveGround(pointAtDepth(...at, near), view, LOW);
+  const { at, way } = entryPoint(entry, near, view.tanY);
+  const start = pointAtDepth(...at, near);
   // He swoops down and away over the title and through the first card to
   // the bottom of his dive, low over the water.
   const tall = horizon > -0.3;
@@ -1566,7 +1557,7 @@ export function raven(
       ? randomBetween(...HOMECOMING_WAIT)
       : randomBetween(...timing.entrance);
   let entranceDue = true;
-  let lastEntry: Entry | null = null;
+  let lastEntry: number | null = null;
   // The fly-in; a first one in over a different edge from the last.
   function flyInPath(view: RavenView): Path {
     if (flyIn === "return") return homecoming(view);
