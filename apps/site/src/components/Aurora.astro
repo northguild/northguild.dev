@@ -280,8 +280,16 @@ import "@northguild/theme/tokens-aurora.css";
       "--ng-to",
       `${50 - (50 * dx) / k}% ${50 - (50 * dy) / k}%`,
     );
-    el.style.setProperty("--ng-dx", dx.toFixed(3));
-    el.style.setProperty("--ng-dy", dy.toFixed(3));
+    // The drift (10px back along his line, Base.astro) stays inside the
+    // page's right and bottom edges: past them it adds a scrollbar while it
+    // plays. The header is full width, so heading left it drifts only
+    // up or down.
+    const root = document.documentElement;
+    const r = el.getBoundingClientRect();
+    const roomX = Math.max(0, root.clientWidth - r.right) / 10;
+    const roomY = Math.max(0, root.scrollHeight - scrollY - r.bottom) / 10;
+    el.style.setProperty("--ng-dx", Math.max(dx, -roomX).toFixed(3));
+    el.style.setProperty("--ng-dy", Math.max(dy, -roomY).toFixed(3));
     el.style.setProperty("--ng-brush-duration", `${duration}s`);
     el.classList.add("ng-brushed");
   }
