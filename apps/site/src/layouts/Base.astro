@@ -77,6 +77,23 @@ const ogAlt =
       type="font/woff2"
       crossorigin
     />
+    <script is:inline>
+      "use strict";
+      // The sound choice (scripts/sound/settings.ts), before first paint, so
+      // the Settings panel's speaker is drawn right on the first frame. The
+      // same key and rule as the GMT docs: sound is on only when a record of
+      // this version says unmuted; anything else reads as muted.
+      {
+        let muted = true;
+        try {
+          const saved = JSON.parse(localStorage.getItem("dox:sound"));
+          if (saved && saved.v === 1 && saved.muted === false) muted = false;
+        } catch {
+          // Unreadable or blocked: muted.
+        }
+        document.documentElement.dataset.sound = muted ? "off" : "on";
+      }
+    </script>
     {
       entrance && import.meta.env.DEV && (
         <script is:inline>

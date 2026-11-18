@@ -36,5 +36,8 @@ NorthGuild's own.
 - `.gmt-sonar-loop`: the same ping on a permanent loop.
 - `.gmt-field`: bevelled text input.
 - `.gmt-button`: small bevelled button.
+- `.gmt-panel`: a `[popover]` panel that slides and fades in and out with a sheen.
+- `.gmt-toggle-button`: small bevelled button lit while `aria-pressed="true"`.
+- `.gmt-fader`: an 11-notch volume fader on `<input type="range">`; set `--gmt-range-pct`.
 
 A `prefers-reduced-motion` reset collapses all animation and transition time.

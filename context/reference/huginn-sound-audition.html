@@ -1,0 +1,2878 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Huginn sound audition</title>
+    <!--
+      Issue #27 sound audition for northguild.dev: Huginn's flight and the
+      aurora draw-in. A planning tool, not site code. Open it from disk
+      (file://), pick one variant per step, and paste the picks block from the
+      last page back into the planning session.
+
+      Every voice is synthesised with the Web Audio API: no samples, no network.
+      The kit at the top is the Dox kit (gmt apps/dox/src/lib/sound/kit.ts), so
+      a picked variant ports into the site's voices as it stands.
+
+      How the flight steps stay in sync: each demo flight is simulated once,
+      ahead of time, at 240 steps a second with the site's own wingbeat
+      (aurora.raven.ts `beat()`: the downstroke is the first 55% of a beat,
+      cosine-eased from +0.75 to -0.65 rad) and its slow motion near the camera
+      (`timeScaleAt`: time runs at distance / 12 m, down to 0.25). The sound is
+      scheduled from that simulation on the audio clock, and the picture is
+      drawn from the same samples at the audio clock's output time
+      (`getOutputTimestamp`), so the wings and the sound share one timeline.
+
+      The owner's picks (2026-11-18): flap I "Heavy · Two wings", glide D
+      "Faint hush", soar B "Open sky", roll D "Tuck breath", slow motion B
+      "Slowed tape", distance C "Air in 3D", draw-in G "Silk rustle", header
+      press I "Distant sonar". It stays
+      after the story closes, as the reference for any voice changed later.
+
+      Changed on the site after a listen: Huginn fades far more steeply with
+      distance than this page's "inverse" model (12 dB each time the distance
+      doubles, silent past 80 m; `distanceGain` in
+      apps/site/src/scripts/sound/huginn.ts), and a steady bed of outdoor air
+      plays under the sky (apps/site/src/scripts/sound/wind.ts).
+    -->
+    <style>
+      :root {
+        --void: #03080c;
+        --surface: #061018;
+        --surface-2: #0a1a24;
+        --ice: #cfeaf2;
+        --ice-dim: #98b2be;
+        --ice-bright: #f2fcff;
+        --cyan: #22d3ee;
+        --frost: #bff3fb;
+        --line: rgb(34 211 238 / 0.32);
+        --line-strong: rgb(34 211 238 / 0.7);
+        --glow: 0 0 0.6rem rgb(34 211 238 / 0.45);
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --bevel: 0.6rem;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(
+            ellipse at 70% -10%,
+            rgb(34 211 238 / 0.08),
+            transparent 60%
+          ),
+          var(--void);
+        color: var(--ice);
+        font: 1rem/1.5 var(--sans);
+        min-block-size: 100dvh;
+      }
+      main {
+        max-inline-size: 62rem;
+        margin-inline: auto;
+        padding: 1rem;
+      }
+      .bevel {
+        border: 1px solid var(--line);
+        border-radius: var(--bevel);
+        corner-shape: bevel;
+        background: linear-gradient(180deg, var(--surface-2), var(--surface));
+      }
+      header.top {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1.5rem;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        margin-block-end: 1rem;
+      }
+      h1 {
+        font: 600 1.05rem/1.2 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin: 0;
+      }
+      .progress {
+        font: 0.85rem var(--mono);
+        color: var(--ice-dim);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .master {
+        display: flex;
+        gap: 0.6rem;
+        align-items: center;
+        font: 0.8rem var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .master output {
+        inline-size: 3.5rem;
+        text-align: end;
+        font-variant-numeric: tabular-nums;
+        color: var(--frost);
+      }
+      input[type="range"] {
+        accent-color: var(--cyan);
+        inline-size: 9rem;
+      }
+      button {
+        font: 600 0.8rem var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ice);
+        background: var(--surface);
+        border: 1px solid var(--line-strong);
+        border-radius: 0.45rem;
+        corner-shape: bevel;
+        padding: 0.45rem 0.9rem;
+        min-block-size: 2.25rem;
+        cursor: pointer;
+      }
+      button:hover {
+        background: var(--surface-2);
+        box-shadow: var(--glow);
+      }
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+      button[disabled] {
+        opacity: 0.45;
+        cursor: default;
+        box-shadow: none;
+      }
+      .step {
+        padding: 1rem 1.25rem 1.25rem;
+      }
+      .step h2 {
+        font: 600 1.3rem/1.2 var(--mono);
+        margin: 0 0 0.25rem;
+        letter-spacing: 0.04em;
+      }
+      .where {
+        color: var(--ice-dim);
+        margin: 0 0 1rem;
+        font-size: 0.9rem;
+      }
+      .scene {
+        display: block;
+        inline-size: 100%;
+        aspect-ratio: 16 / 7;
+        margin-block-end: 0.4rem;
+        border: 1px solid var(--line);
+        border-radius: var(--bevel);
+        corner-shape: bevel;
+        background: var(--void);
+      }
+      .caption {
+        font: 0.75rem var(--mono);
+        color: var(--ice-dim);
+        margin: 0 0 1rem;
+        min-block-size: 1.2em;
+      }
+      .variants {
+        display: grid;
+        grid-template-columns: repeat(
+          auto-fit,
+          minmax(min(100%, 13.5rem), 1fr)
+        );
+        gap: 0.75rem;
+      }
+      .variant {
+        min-inline-size: 0;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 0.5rem;
+        padding: 0.85rem;
+        border: 1px solid var(--line);
+        border-radius: var(--bevel);
+        corner-shape: bevel;
+        background: var(--surface);
+      }
+      /* The pick is a full bevelled border, never a left edge. */
+      .variant:has(input[name="pick"]:checked) {
+        border-color: var(--cyan);
+        box-shadow: var(--glow);
+        background: var(--surface-2);
+      }
+      .variant h3 {
+        margin: 0;
+        font: 600 0.95rem var(--mono);
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+      }
+      .letter {
+        color: var(--void);
+        background: var(--frost);
+        padding: 0 0.4rem;
+        border-radius: 0.25rem;
+        corner-shape: bevel;
+      }
+      .variant p {
+        margin: 0;
+        font-size: 0.85rem;
+        color: var(--ice-dim);
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .plays {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+      .pick {
+        display: flex;
+        gap: 0.35rem;
+        align-items: center;
+        font: 0.8rem var(--mono);
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .pick input {
+        accent-color: var(--cyan);
+        inline-size: 1rem;
+        block-size: 1rem;
+      }
+      .none {
+        margin-block-start: 0.75rem;
+      }
+      nav.pager {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-block-end: 1rem;
+      }
+      pre.picks {
+        font: 0.85rem/1.5 var(--mono);
+        background: var(--void);
+        border: 1px solid var(--line);
+        border-radius: var(--bevel);
+        corner-shape: bevel;
+        padding: 0.75rem 1rem;
+        overflow-x: auto;
+        white-space: pre;
+      }
+      .note {
+        font-size: 0.85rem;
+        color: var(--ice-dim);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="top bevel">
+        <h1>Huginn · sound audition</h1>
+        <span class="progress" id="progress"></span>
+        <label class="master"
+          >Master
+          <input id="master" type="range" min="0" max="11" step="1" value="6" />
+          <output id="master-out" for="master">6</output>
+        </label>
+        <button type="button" id="stop-all">Stop</button>
+      </header>
+      <nav class="pager" aria-label="Steps">
+        <button type="button" id="back">Back</button>
+        <button type="button" id="next">Next</button>
+      </nav>
+      <section class="step bevel" id="step" aria-live="polite"></section>
+      <p class="note">
+        Headphones help: Huginn pans and moves in depth. Press a Play button
+        first, since browsers start audio only after a click. Your picks are
+        kept in this browser, so a reload loses nothing. Each flight step plays
+        with your earlier picks (or nothing for a layer not yet picked), so the
+        flight builds up as you go.
+      </p>
+    </main>
+
+    <script>
+      "use strict";
+
+      /* ===================================================================
+       * The kit: the Dox kit, plus a stroke shaped by the wingbeat. Every
+       * time is on the audio clock (AudioContext.currentTime).
+       * =================================================================== */
+
+      const MAX_GAIN = 0.6;
+      const MAX_LEVEL = 11;
+      let ctx = null;
+      let master = null;
+      let level = 6;
+
+      function audio() {
+        if (!ctx) {
+          ctx = new AudioContext();
+          master = ctx.createGain();
+          master.gain.value = (level / MAX_LEVEL) * MAX_GAIN;
+          /* The Dox safety ceiling: under 0.18 passes unchanged, louder bends
+             toward 0.25 (-12 dBFS) and never passes it. */
+          const shaper = ctx.createWaveShaper();
+          const curve = new Float32Array(4097);
+          for (let i = 0; i < curve.length; i++) {
+            const x = (i / (curve.length - 1)) * 2 - 1;
+            const m = Math.abs(x);
+            curve[i] =
+              Math.sign(x) *
+              (m <= 0.18 ? m : 0.18 + 0.07 * Math.tanh((m - 0.18) / 0.07));
+          }
+          shaper.curve = curve;
+          master.connect(shaper).connect(ctx.destination);
+        }
+        if (ctx.state === "suspended") ctx.resume();
+        return ctx;
+      }
+
+      function setMasterLevel(next) {
+        level = Math.max(0, Math.min(MAX_LEVEL, Math.round(next)));
+        if (master && ctx)
+          master.gain.setTargetAtTime(
+            (level / MAX_LEVEL) * MAX_GAIN,
+            ctx.currentTime,
+            0.015,
+          );
+      }
+
+      function hz(midi) {
+        return 440 * 2 ** ((midi - 69) / 12);
+      }
+      function randomBetween(lo, hi) {
+        return lo + Math.random() * (hi - lo);
+      }
+      function clamp(x, lo, hi) {
+        return Math.min(hi, Math.max(lo, x));
+      }
+      function smoothstep(x) {
+        const k = clamp(x, 0, 1);
+        return k * k * (3 - 2 * k);
+      }
+
+      let noiseCache = null;
+      /** One second of white noise, shared by every voice. */
+      function noiseBuffer(c) {
+        if (noiseCache && noiseCache.sampleRate === c.sampleRate)
+          return noiseCache;
+        noiseCache = c.createBuffer(1, c.sampleRate, c.sampleRate);
+        const data = noiseCache.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        return noiseCache;
+      }
+
+      /** Looping noise that starts at t; the caller stops it. */
+      function heldNoise(c, t) {
+        const src = c.createBufferSource();
+        src.buffer = noiseBuffer(c);
+        src.loop = true;
+        src.start(t, Math.random() * 0.5);
+        return src;
+      }
+
+      function envelope(c, t, peak, attack, hold, release) {
+        const g = c.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(peak, t + attack);
+        g.gain.setValueAtTime(peak, t + attack + hold);
+        g.gain.exponentialRampToValueAtTime(
+          0.0001,
+          t + attack + hold + release,
+        );
+        return g;
+      }
+
+      function biquad(c, type, freq, q) {
+        const f = c.createBiquadFilter();
+        f.type = type;
+        f.frequency.value = freq;
+        f.Q.value = q ?? 0.7;
+        return f;
+      }
+
+      /** A gain that is silent until its first ramp. */
+      function silentGain(c, t) {
+        const g = c.createGain();
+        g.gain.value = 0;
+        g.gain.setValueAtTime(0, t);
+        return g;
+      }
+
+      function tone(c, out, t, o) {
+        const attack = o.attack ?? 0.004;
+        const hold = o.hold ?? 0;
+        const end = t + attack + hold + o.release;
+        const osc = c.createOscillator();
+        osc.type = o.type ?? "sine";
+        osc.frequency.setValueAtTime(o.freq, t);
+        if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, end);
+        if (o.detune) osc.detune.value = o.detune;
+        const g = envelope(c, t, o.peak, attack, hold, o.release);
+        osc.connect(g).connect(out);
+        osc.start(t);
+        osc.stop(end + 0.03);
+      }
+
+      function noise(c, out, t, o) {
+        const attack = o.attack ?? 0.004;
+        const hold = o.hold ?? 0;
+        const end = t + attack + hold + o.decay;
+        const src = c.createBufferSource();
+        src.buffer = noiseBuffer(c);
+        src.loop = true;
+        const f = biquad(c, o.type ?? "bandpass", o.freq, o.q ?? 1);
+        // Anchor the sweep at t: without it the ramp runs from when this was
+        // called, and a sound scheduled seconds ahead would arrive swept.
+        f.frequency.setValueAtTime(o.freq, t);
+        if (o.to) f.frequency.exponentialRampToValueAtTime(o.to, end);
+        const g = envelope(c, t, o.peak, attack, hold, o.decay);
+        src.connect(f).connect(g).connect(out);
+        src.start(t, Math.random() * 0.5);
+        src.stop(end + 0.03);
+      }
+
+      function hall(c, out, seconds, wet) {
+        const length = Math.ceil(c.sampleRate * seconds);
+        const impulse = c.createBuffer(2, length, c.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+          const d = impulse.getChannelData(ch);
+          for (let i = 0; i < length; i++)
+            d[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 3;
+        }
+        const verb = c.createConvolver();
+        verb.buffer = impulse;
+        const g = c.createGain();
+        g.gain.value = wet;
+        verb
+          .connect(biquad(c, "lowpass", 3000))
+          .connect(g)
+          .connect(out);
+        return verb;
+      }
+
+      function echo(c, out, seconds, feedback, wet) {
+        const input = c.createGain();
+        const delay = c.createDelay(2);
+        delay.delayTime.value = seconds;
+        const loop = c.createGain();
+        loop.gain.value = feedback;
+        const damp = biquad(c, "lowpass", 2600);
+        const g = c.createGain();
+        g.gain.value = wet;
+        input.connect(delay).connect(damp).connect(loop).connect(delay);
+        damp.connect(g).connect(out);
+        return input;
+      }
+
+      const shared = new Map();
+      function space(c) {
+        if (!shared.has("hall")) shared.set("hall", hall(c, master, 2.6, 0.5));
+        return shared.get("hall");
+      }
+
+      /** The Dox Steel breath: noise through a short feedback delay. */
+      function steelComb(c, out, t, o) {
+        const end = t + o.attack + o.release;
+        const src = c.createBufferSource();
+        src.buffer = noiseBuffer(c);
+        src.loop = true;
+        const pre = biquad(c, "bandpass", o.band ?? 2400, 0.5);
+        const env = envelope(c, t, o.peak, o.attack, 0, o.release);
+        const delay = c.createDelay(0.05);
+        delay.delayTime.setValueAtTime(o.from, t);
+        delay.delayTime.exponentialRampToValueAtTime(o.to, end);
+        const feedback = c.createGain();
+        feedback.gain.value = o.feedback ?? 0.8;
+        const colour = biquad(c, "lowpass", o.lowpass ?? 5500);
+        src.connect(pre).connect(env).connect(delay);
+        delay.connect(feedback).connect(delay);
+        delay.connect(colour).connect(out);
+        if (o.wet) {
+          const wet = c.createGain();
+          wet.gain.value = o.wet;
+          colour.connect(wet).connect(space(c));
+        }
+        src.start(t, Math.random() * 0.5);
+        src.stop(end + 0.05);
+      }
+
+      /** sin(pi x)^pow from 0 to 0, times peak: the wing's speed through one stroke. */
+      function strokeCurve(pow, peak) {
+        const n = 64;
+        const curve = new Float32Array(n);
+        for (let i = 0; i < n; i++)
+          curve[i] = peak * Math.sin((Math.PI * i) / (n - 1)) ** pow;
+        curve[n - 1] = 0;
+        return curve;
+      }
+
+      /** A tremolo: returns { amp, osc }. Feathers fluttering in the stream. */
+      function flutter(c, rate, depth) {
+        const amp = c.createGain();
+        amp.gain.value = 1 - depth;
+        const osc = c.createOscillator();
+        osc.frequency.value = rate;
+        const d = c.createGain();
+        d.gain.value = depth;
+        osc.connect(d).connect(amp.gain);
+        return { amp, osc };
+      }
+
+      /**
+       * One stroke of a wing: filtered noise whose level follows the wing's
+       * speed through the stroke, from t for dur seconds.
+       * o: { type, freq, to, q, peak, pow, flutter, depth }.
+       */
+      function stroke(c, out, t, dur, o) {
+        if (dur < 0.01 || o.peak <= 0) return;
+        const src = c.createBufferSource();
+        src.buffer = noiseBuffer(c);
+        src.loop = true;
+        const f = biquad(c, o.type ?? "bandpass", o.freq, o.q ?? 1);
+        if (o.to) {
+          f.frequency.setValueAtTime(o.freq, t);
+          f.frequency.exponentialRampToValueAtTime(o.to, t + dur);
+        }
+        const g = c.createGain();
+        g.gain.value = 0;
+        g.gain.setValueCurveAtTime(strokeCurve(o.pow ?? 2, o.peak), t, dur);
+        let chain = src.connect(f);
+        if (o.flutter) {
+          const fl = flutter(c, o.flutter, o.depth ?? 0.6);
+          chain = chain.connect(fl.amp);
+          fl.osc.start(t);
+          fl.osc.stop(t + dur + 0.05);
+        }
+        chain.connect(g).connect(out);
+        src.start(t, Math.random() * 0.5);
+        src.stop(t + dur + 0.05);
+      }
+
+      let crackleCache = null;
+      /** One second of sparse clicks, shared: feather barbs catching and letting go. */
+      function crackleBuffer(c) {
+        if (crackleCache && crackleCache.sampleRate === c.sampleRate)
+          return crackleCache;
+        crackleCache = c.createBuffer(1, c.sampleRate, c.sampleRate);
+        const data = crackleCache.getChannelData(0);
+        for (let i = 0; i < 700; i++) {
+          const at = Math.floor(Math.random() * (data.length - 32));
+          const amp =
+            (Math.random() * 2 - 1) * (0.3 + 0.7 * Math.random() ** 2);
+          for (let k = 0; k < 24; k++)
+            data[at + k] += amp * Math.exp(-k / 5) * (k % 2 ? -1 : 1);
+        }
+        return crackleCache;
+      }
+
+      /** lo rising to hi and back over a stroke, as the wing's speed does: sin(pi x)^pow. */
+      function speedCurve(lo, hi, pow) {
+        const n = 64;
+        const curve = new Float32Array(n);
+        for (let i = 0; i < n; i++)
+          curve[i] = lo + (hi - lo) * Math.sin((Math.PI * i) / (n - 1)) ** pow;
+        return curve;
+      }
+
+      /**
+       * Air pushed by a wing: noise whose level and brightness both follow the
+       * wing's speed, so it opens up as the wing speeds through the middle of
+       * the stroke and closes as it slows. Unpitched, as real wing noise is.
+       * o: { type, lo, hi, q, peak, pow, fpow, buffer }.
+       */
+      function airStroke(c, out, t, dur, o) {
+        if (dur < 0.01 || o.peak <= 0) return;
+        const src = c.createBufferSource();
+        src.buffer = o.buffer ?? noiseBuffer(c);
+        src.loop = true;
+        const f = biquad(c, o.type ?? "lowpass", o.lo, o.q ?? 0.7);
+        f.frequency.setValueCurveAtTime(
+          speedCurve(o.lo, o.hi, o.fpow ?? 1.5),
+          t,
+          dur,
+        );
+        const g = c.createGain();
+        g.gain.value = 0;
+        g.gain.setValueCurveAtTime(strokeCurve(o.pow ?? 2, o.peak), t, dur);
+        src.connect(f).connect(g).connect(out);
+        src.start(t, Math.random() * 0.5);
+        src.stop(t + dur + 0.05);
+      }
+
+      /** The air pressed down under the wing: a deep push with no note in it. */
+      function pressure(c, out, t, dur, peak, lo = 55, hi = 140) {
+        airStroke(c, out, t, dur, {
+          type: "lowpass",
+          lo,
+          hi,
+          q: 1.2,
+          peak,
+          pow: 3,
+        });
+      }
+
+      /** No two real wingbeats are the same: a small random spread per beat. */
+      function beatJitter() {
+        return {
+          level: randomBetween(0.85, 1.08),
+          tone: randomBetween(0.92, 1.08),
+        };
+      }
+
+      function rampTo(param, value, t) {
+        param.linearRampToValueAtTime(value, t);
+      }
+
+      /* ===================================================================
+       * Huginn's wingbeat, as aurora.raven.ts draws it.
+       * =================================================================== */
+
+      const DOWN = 0.55;
+      const TOP = 0.75;
+      const BOTTOM = -0.65;
+
+      function wingPose(p) {
+        const down = p < DOWN;
+        const x = down ? p / DOWN : (p - DOWN) / (1 - DOWN);
+        const ease = (1 - Math.cos(Math.PI * x)) / 2;
+        const bump = Math.sin(Math.PI * x);
+        return {
+          arm: down
+            ? TOP + (BOTTOM - TOP) * ease
+            : BOTTOM + (TOP - BOTTOM) * ease,
+          hand: down ? 0.3 * bump : -0.4 * bump,
+          fold: down ? 0 : bump,
+        };
+      }
+
+      /* ===================================================================
+       * The variants.
+       *
+       *   flap   beat(c, out, t, down, up, m): one wingbeat; down and up are
+       *          the strokes' lengths in seconds. m = { pitch, gain }.
+       *   glide, soar
+       *          air(c, out, t0) -> { set(t, s), stop(t) }: held air.
+       *          s = { speed (m/s), amount (0 to 1), pitch }.
+       *   roll   play(c, out, t, dur): rolling onto his back and over again.
+       *   slowmo { pitch(k), gain(k), sub(k) }: how the voices change while
+       *          time runs at k of real time near the camera.
+       *   space  make(c, out) -> { input, set(t, [x, y, z]) }: distance and
+       *          direction. x right, y up, z away from the viewer, metres.
+       *   brush  play(c, out, t, o): a page box drawing in.
+       *          o = { dur, kind: "header" | "text" | "card", rank }.
+       * =================================================================== */
+
+      const FLAP = [
+        {
+          id: "A",
+          name: "Feather whoosh",
+          desc: "A soft, broad whoosh on each downstroke, swelling with the wing's speed, and a faint lighter brush as the wing comes back up.",
+          beat(c, out, t, down, up, m) {
+            stroke(c, out, t, down, {
+              freq: 650 * m.pitch,
+              to: 900 * m.pitch,
+              q: 0.8,
+              peak: 0.16 * m.gain,
+            });
+            stroke(c, out, t + down, up, {
+              freq: 1700 * m.pitch,
+              q: 1.1,
+              peak: 0.035 * m.gain,
+            });
+          },
+        },
+        {
+          id: "B",
+          name: "Heavy beat",
+          desc: "A big bird's power stroke: a dark, low push of air with a soft thump where the wing is fastest. The upstroke is silent.",
+          beat(c, out, t, down, up, m) {
+            stroke(c, out, t, down, {
+              type: "lowpass",
+              freq: 800 * m.pitch,
+              q: 0.7,
+              peak: 0.2 * m.gain,
+            });
+            tone(c, out, t + down * 0.45, {
+              freq: 85 * m.pitch,
+              to: 55 * m.pitch,
+              peak: 0.06 * m.gain,
+              attack: 0.02,
+              release: 0.14,
+            });
+          },
+        },
+        {
+          id: "C",
+          name: "Swish pair",
+          desc: "Two clear strokes, whoosh-whish: a rising whoosh down and a sharper, airy swish up, as the hand flicks back.",
+          beat(c, out, t, down, up, m) {
+            stroke(c, out, t, down, {
+              freq: 520 * m.pitch,
+              to: 1150 * m.pitch,
+              q: 1,
+              peak: 0.14 * m.gain,
+            });
+            stroke(c, out, t + down, up, {
+              type: "highpass",
+              freq: 2600 * m.pitch,
+              q: 0.7,
+              peak: 0.06 * m.gain,
+              pow: 3,
+            });
+          },
+        },
+        {
+          id: "D",
+          name: "Feather rattle",
+          desc: "The raven's own creak: the downstroke's air buzzes as the primaries flutter in it, about 48 times a second.",
+          beat(c, out, t, down, up, m) {
+            stroke(c, out, t, down, {
+              freq: 1100 * m.pitch,
+              q: 1.4,
+              peak: 0.17 * m.gain,
+              flutter: 48,
+              depth: 0.7,
+            });
+            stroke(c, out, t + down, up, {
+              freq: 1900 * m.pitch,
+              q: 1.2,
+              peak: 0.03 * m.gain,
+            });
+          },
+        },
+        {
+          id: "E",
+          name: "Silk",
+          desc: "Barely there: a high, airy breath on both strokes, like silk drawn through the air. Heard only when he is close.",
+          beat(c, out, t, down, up, m) {
+            stroke(c, out, t, down, {
+              type: "highpass",
+              freq: 2400 * m.pitch,
+              q: 0.6,
+              peak: 0.07 * m.gain,
+            });
+            stroke(c, out, t + down, up, {
+              type: "highpass",
+              freq: 3500 * m.pitch,
+              q: 0.6,
+              peak: 0.025 * m.gain,
+            });
+          },
+        },
+        /* F to I: Heavy beat, made real. The low end is air pressure, never a
+           note; the brightness follows the wing's speed through the stroke; and
+           every beat varies a little in level and tone. */
+        {
+          id: "F",
+          name: "Heavy · Whuff",
+          desc: "A raven passing low overhead: a breathy, unpitched whuff that brightens as the wing speeds up and darkens as it slows, over a soft push of air. A barely-there spill on the way up.",
+          beat(c, out, t, down, up, m) {
+            const j = beatJitter();
+            const p = m.pitch * j.tone;
+            airStroke(c, out, t, down, {
+              type: "lowpass",
+              lo: 250 * p,
+              hi: 1300 * p,
+              q: 0.8,
+              peak: 0.2 * m.gain * j.level,
+            });
+            pressure(c, out, t, down, 0.22 * m.gain * j.level, 60 * p, 150 * p);
+            airStroke(c, out, t + down, up, {
+              type: "bandpass",
+              lo: 900 * p,
+              hi: 1500 * p,
+              q: 0.9,
+              peak: 0.025 * m.gain * j.level,
+            });
+          },
+        },
+        {
+          id: "G",
+          name: "Heavy · Feathered push",
+          desc: "The whuff with feathers in it: a fine crackle as the barbs rub through the stroke, and a dry rustle at the bottom as the primaries twist open to come back up.",
+          beat(c, out, t, down, up, m) {
+            const j = beatJitter();
+            const p = m.pitch * j.tone;
+            airStroke(c, out, t, down, {
+              type: "lowpass",
+              lo: 230 * p,
+              hi: 1150 * p,
+              q: 0.8,
+              peak: 0.18 * m.gain * j.level,
+            });
+            pressure(c, out, t, down, 0.2 * m.gain * j.level, 60 * p, 140 * p);
+            airStroke(c, out, t, down, {
+              type: "bandpass",
+              lo: 2200 * p,
+              hi: 3400 * p,
+              q: 0.8,
+              peak: 0.12 * m.gain * j.level,
+              pow: 1.5,
+              buffer: crackleBuffer(c),
+            });
+            const src = c.createBufferSource();
+            src.buffer = crackleBuffer(c);
+            src.loop = true;
+            const env = envelope(
+              c,
+              t + down,
+              0.06 * m.gain * j.level,
+              0.008,
+              0,
+              Math.min(0.09, up * 0.5),
+            );
+            src
+              .connect(biquad(c, "bandpass", 2600 * p, 0.9))
+              .connect(env)
+              .connect(out);
+            src.start(t + down, Math.random() * 0.5);
+            src.stop(t + down + 0.15);
+          },
+        },
+        {
+          id: "H",
+          name: "Heavy · Pressure wave",
+          desc: "You feel it more than hear it: a deep push of air pressed down under the wing, a darker whoosh on top, and on the way up the faint hiss of air slipping through the spread fingers.",
+          beat(c, out, t, down, up, m) {
+            const j = beatJitter();
+            const p = m.pitch * j.tone;
+            pressure(c, out, t, down, 0.3 * m.gain * j.level, 50 * p, 120 * p);
+            airStroke(c, out, t, down, {
+              type: "lowpass",
+              lo: 200 * p,
+              hi: 700 * p,
+              q: 0.9,
+              peak: 0.14 * m.gain * j.level,
+            });
+            airStroke(c, out, t + down, up, {
+              type: "highpass",
+              lo: 3000 * p,
+              hi: 4200 * p,
+              q: 0.5,
+              peak: 0.018 * m.gain * j.level,
+              pow: 3,
+            });
+          },
+        },
+        {
+          id: "I",
+          name: "Heavy · Two wings",
+          desc: "Each wing its own push, a little apart left and right and a few milliseconds apart, with a hollow low resonance like a big wing cupping the air. Wide and present when he is close.",
+          beat(c, out, t, down, up, m) {
+            const j = beatJitter();
+            const p = m.pitch * j.tone;
+            pressure(c, out, t, down, 0.18 * m.gain * j.level, 55 * p, 130 * p);
+            for (const [side, lag] of [
+              [-0.4, 0],
+              [0.4, 0.004],
+            ]) {
+              const pan = c.createStereoPanner();
+              pan.pan.value = side;
+              pan.connect(out);
+              const level = m.gain * j.level * randomBetween(0.9, 1.1);
+              airStroke(c, pan, t + lag, down, {
+                type: "lowpass",
+                lo: 220 * p,
+                hi: 1100 * p,
+                q: 0.9,
+                peak: 0.13 * level,
+              });
+              airStroke(c, pan, t + lag, down, {
+                type: "bandpass",
+                lo: 160 * p,
+                hi: 260 * p,
+                q: 2,
+                peak: 0.12 * level,
+              });
+            }
+          },
+        },
+      ];
+
+      const GLIDE = [
+        {
+          id: "A",
+          name: "Air over feathers",
+          desc: "A soft, steady hush of air, louder as he speeds up in a dive and quieter as he slows.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const bp = biquad(c, "bandpass", 700, 0.5);
+            const g = silentGain(c, t0);
+            src
+              .connect(biquad(c, "lowpass", 900, 0.5))
+              .connect(bp)
+              .connect(g)
+              .connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.09 * (s.speed / 10) ** 2 * s.amount, t);
+                rampTo(bp.frequency, 700 * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+              },
+            };
+          },
+        },
+        {
+          id: "B",
+          name: "Rushing air",
+          desc: "Brighter, and pitched by his speed: the air climbs as he dives and sinks as he levels out.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const bp = biquad(c, "bandpass", 900, 0.9);
+            const g = silentGain(c, t0);
+            src.connect(bp).connect(g).connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.08 * (s.speed / 10) ** 2.5 * s.amount, t);
+                rampTo(bp.frequency, (300 + 70 * s.speed) * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+              },
+            };
+          },
+        },
+        {
+          id: "C",
+          name: "Gusting",
+          desc: "Air over feathers with the wind in it: the hush rises and falls in slow, uneven gusts.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const bp = biquad(c, "bandpass", 700, 0.5);
+            const gust = c.createGain();
+            gust.gain.value = 0.6;
+            const lfos = [0.31, 0.53].map((rate) => {
+              const o = c.createOscillator();
+              o.frequency.value = rate;
+              const d = c.createGain();
+              d.gain.value = 0.2;
+              o.connect(d).connect(gust.gain);
+              o.start(t0);
+              return o;
+            });
+            const g = silentGain(c, t0);
+            src
+              .connect(biquad(c, "lowpass", 900, 0.5))
+              .connect(bp)
+              .connect(gust)
+              .connect(g)
+              .connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.12 * (s.speed / 10) ** 2 * s.amount, t);
+                rampTo(bp.frequency, 700 * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+                for (const o of lfos) o.stop(t);
+              },
+            };
+          },
+        },
+        {
+          id: "D",
+          name: "Faint hush",
+          desc: "Only a low, distant hush: you feel him go by more than hear him.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const lp = biquad(c, "lowpass", 380, 0.5);
+            const g = silentGain(c, t0);
+            src.connect(lp).connect(g).connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.1 * (s.speed / 10) ** 2 * s.amount, t);
+                rampTo(lp.frequency, 380 * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+              },
+            };
+          },
+        },
+      ];
+
+      const SOAR = [
+        {
+          id: "A",
+          name: "Singing fingers",
+          desc: "Air through the spread primaries: two faint whistles drifting slowly in pitch over a soft wind.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const b1 = biquad(c, "bandpass", 1650, 14);
+            const b2 = biquad(c, "bandpass", 2480, 16);
+            const whistle = c.createGain();
+            whistle.gain.value = 2.2;
+            src.connect(b1).connect(whistle);
+            src.connect(b2).connect(whistle);
+            const wind = c.createGain();
+            wind.gain.value = 0.35;
+            src.connect(biquad(c, "lowpass", 600, 0.5)).connect(wind);
+            const lfo = c.createOscillator();
+            lfo.frequency.value = 0.09;
+            const depth = c.createGain();
+            depth.gain.value = 60;
+            lfo.connect(depth);
+            depth.connect(b1.detune);
+            depth.connect(b2.detune);
+            lfo.start(t0);
+            const g = silentGain(c, t0);
+            whistle.connect(g);
+            wind.connect(g);
+            g.connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.08 * (s.speed / 9) ** 2 * s.amount, t);
+                rampTo(b1.frequency, 1650 * s.pitch, t);
+                rampTo(b2.frequency, 2480 * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+                lfo.stop(t);
+              },
+            };
+          },
+        },
+        {
+          id: "B",
+          name: "Open sky",
+          desc: "A broad, soft wind that swells and ebbs every few seconds, like a thermal lifting him.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const lp = biquad(c, "lowpass", 550, 0.9);
+            const lfo = c.createOscillator();
+            lfo.frequency.value = 0.16;
+            const depth = c.createGain();
+            depth.gain.value = 300;
+            lfo.connect(depth).connect(lp.frequency);
+            lfo.start(t0);
+            const g = silentGain(c, t0);
+            src.connect(lp).connect(g).connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.11 * (s.speed / 9) ** 2 * s.amount, t);
+                rampTo(lp.frequency, 550 * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+                lfo.stop(t);
+              },
+            };
+          },
+        },
+        {
+          id: "C",
+          name: "Taut feathers",
+          desc: "Steady air with a light flutter in it, the trailing edge trembling in the stream.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const bp = biquad(c, "bandpass", 900, 1.2);
+            const fl = flutter(c, 17, 0.35);
+            fl.osc.start(t0);
+            const low = c.createGain();
+            low.gain.value = 0.4;
+            const g = silentGain(c, t0);
+            src.connect(bp).connect(fl.amp).connect(g);
+            src
+              .connect(biquad(c, "lowpass", 400, 0.5))
+              .connect(low)
+              .connect(g);
+            g.connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.09 * (s.speed / 9) ** 2 * s.amount, t);
+                rampTo(bp.frequency, 900 * s.pitch, t);
+              },
+              stop(t) {
+                src.stop(t);
+                fl.osc.stop(t);
+              },
+            };
+          },
+        },
+        {
+          id: "D",
+          name: "Steel wind",
+          desc: "Wind through a steel tube, the Dox panel's family: a faint held ring that drifts as he turns.",
+          air(c, out, t0) {
+            const src = heldNoise(c, t0);
+            const pre = biquad(c, "bandpass", 2400, 0.5);
+            const delay = c.createDelay(0.05);
+            delay.delayTime.value = 1 / 392;
+            const fb = c.createGain();
+            fb.gain.value = 0.78;
+            const lfo = c.createOscillator();
+            lfo.frequency.value = 0.05;
+            const depth = c.createGain();
+            depth.gain.value = 0.00008;
+            lfo.connect(depth).connect(delay.delayTime);
+            lfo.start(t0);
+            const g = silentGain(c, t0);
+            src.connect(pre).connect(delay);
+            delay.connect(fb).connect(delay);
+            delay
+              .connect(biquad(c, "lowpass", 3000))
+              .connect(g)
+              .connect(out);
+            return {
+              set(t, s) {
+                rampTo(g.gain, 0.04 * (s.speed / 9) ** 2 * s.amount, t);
+              },
+              stop(t) {
+                src.stop(t);
+                lfo.stop(t);
+              },
+            };
+          },
+        },
+      ];
+
+      /** His roll angle k of the way through it, as aurora.raven.ts turns it. */
+      function rollAngle(seconds) {
+        return (
+          Math.PI * smoothstep(seconds / 0.55) +
+          Math.PI * smoothstep((seconds - 0.75) / 0.55)
+        );
+      }
+
+      const ROLL = [
+        {
+          id: "A",
+          name: "Double swoosh",
+          desc: "One swoosh as he goes onto his back and another as he comes over again.",
+          play(c, out, t, dur) {
+            const k = dur / 1.3;
+            noise(c, out, t, {
+              freq: 400,
+              to: 1500,
+              q: 1,
+              peak: 0.12,
+              attack: 0.28 * k,
+              decay: 0.3 * k,
+            });
+            noise(c, out, t + 0.75 * k, {
+              freq: 450,
+              to: 1600,
+              q: 1,
+              peak: 0.11,
+              attack: 0.28 * k,
+              decay: 0.3 * k,
+            });
+          },
+        },
+        {
+          id: "B",
+          name: "Flutter tumble",
+          desc: "The feathers rattle in the turn: a fluttering rush for the whole roll.",
+          play(c, out, t, dur) {
+            const k = dur / 1.3;
+            const src = heldNoise(c, t);
+            const fl = flutter(c, 32, 0.7);
+            fl.osc.start(t);
+            const env = envelope(c, t, 0.12, 0.3 * k, 0.5 * k, 0.5 * k);
+            src
+              .connect(biquad(c, "bandpass", 1300, 1.2))
+              .connect(fl.amp)
+              .connect(env)
+              .connect(out);
+            src.stop(t + 1.4 * k);
+            fl.osc.stop(t + 1.4 * k);
+          },
+        },
+        {
+          id: "C",
+          name: "Wind spin",
+          desc: "The air follows his roll exactly: it brightens as his wings stand on edge and settles flat again, twice.",
+          play(c, out, t, dur) {
+            const n = 96;
+            const freq = new Float32Array(n);
+            const gain = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+              const edge = Math.abs(Math.sin(rollAngle((1.3 * i) / (n - 1))));
+              freq[i] = 500 + 1400 * edge;
+              gain[i] = 0.02 + 0.12 * edge ** 1.5;
+            }
+            gain[n - 1] = 0;
+            const src = heldNoise(c, t);
+            const bp = biquad(c, "bandpass", 500, 1.1);
+            bp.frequency.setValueCurveAtTime(freq, t, dur);
+            const g = c.createGain();
+            g.gain.value = 0;
+            g.gain.setValueCurveAtTime(gain, t, dur);
+            src.connect(bp).connect(g).connect(out);
+            src.stop(t + dur + 0.05);
+          },
+        },
+        {
+          id: "D",
+          name: "Tuck breath",
+          desc: "One soft, low breath as he tucks his wings in and turns over.",
+          play(c, out, t, dur) {
+            const k = dur / 1.3;
+            noise(c, out, t, {
+              type: "lowpass",
+              freq: 700,
+              to: 300,
+              q: 0.7,
+              peak: 0.07,
+              attack: 0.25 * k,
+              decay: 0.65 * k,
+            });
+          },
+        },
+      ];
+
+      const SLOWMO = [
+        {
+          id: "A",
+          name: "Real time",
+          desc: "Only the timing slows, beat for beat with his wings. Each whoosh keeps its pitch, so the slow motion is in the rhythm alone.",
+          pitch: () => 1,
+          gain: () => 1,
+          sub: () => 0,
+        },
+        {
+          id: "B",
+          name: "Slowed tape",
+          desc: "Everything he makes drops in pitch as time slows, like a slowed recording: at quarter speed his air is an octave down.",
+          pitch: (k) => k ** 0.5,
+          gain: () => 1,
+          sub: () => 0,
+        },
+        {
+          id: "C",
+          name: "Deep and close",
+          desc: "Slowed tape, plus a low body to each beat that grows as he comes near: you feel the size of the wing.",
+          pitch: (k) => k ** 0.35,
+          gain: () => 1,
+          sub: (k) => (1 - k) / 0.75,
+        },
+        {
+          id: "D",
+          name: "Hush",
+          desc: "The moment goes quiet: near the camera his sounds soften to a breath while he drifts past.",
+          pitch: () => 1,
+          gain: (k) => 0.35 + 0.65 * k,
+          sub: () => 0,
+        },
+      ];
+
+      /** Where a space's air absorption puts the cutoff at a distance: far is muffled. */
+      function airCutoff(dist) {
+        return clamp(18000 * (3 / Math.max(dist, 3)) ** 1.1, 700, 18000);
+      }
+
+      /** A 3D panner, with the listener at the viewer's eye looking into the page. */
+      function panner3d(c) {
+        const p = c.createPanner();
+        p.panningModel = "HRTF";
+        p.distanceModel = "inverse";
+        p.refDistance = 4;
+        p.rolloffFactor = 1;
+        p.maxDistance = 200;
+        return p;
+      }
+      function placePanner(p, [x, y, z], t, first) {
+        if (p.positionX) {
+          for (const [param, v] of [
+            [p.positionX, x],
+            [p.positionY, y],
+            [p.positionZ, -z],
+          ]) {
+            if (first) param.setValueAtTime(v, t);
+            else rampTo(param, v, t);
+          }
+        } else {
+          p.setPosition(x, y, -z);
+        }
+      }
+
+      const SPACE = [
+        {
+          id: "A",
+          name: "Plain",
+          desc: "Left to right by where he is on screen, and quieter with distance. Nothing else.",
+          make(c, out) {
+            const input = c.createGain();
+            const pan = c.createStereoPanner();
+            const g = c.createGain();
+            input.connect(pan).connect(g).connect(out);
+            return {
+              input,
+              set(t, [x, y, z]) {
+                const d = Math.hypot(x, y, z);
+                rampTo(pan.pan, clamp(x / Math.max(d, 1.5), -1, 1) * 0.9, t);
+                rampTo(g.gain, 4 / Math.max(d, 4), t);
+              },
+            };
+          },
+        },
+        {
+          id: "B",
+          name: "Air",
+          desc: "Plain, and the air takes the highs as he goes away: close he is crisp, far off a soft, muffled shape.",
+          make(c, out) {
+            const input = c.createGain();
+            const lp = biquad(c, "lowpass", 18000, 0.5);
+            const pan = c.createStereoPanner();
+            const g = c.createGain();
+            input.connect(lp).connect(pan).connect(g).connect(out);
+            return {
+              input,
+              set(t, [x, y, z]) {
+                const d = Math.hypot(x, y, z);
+                rampTo(lp.frequency, airCutoff(d), t);
+                rampTo(pan.pan, clamp(x / Math.max(d, 1.5), -1, 1) * 0.9, t);
+                rampTo(g.gain, 4 / Math.max(d, 4), t);
+              },
+            };
+          },
+        },
+        {
+          id: "C",
+          name: "Air in 3D",
+          desc: "Air, placed in 3D for headphones: the fly-in comes from behind and above your shoulder before he shows.",
+          make(c, out) {
+            const input = c.createGain();
+            const lp = biquad(c, "lowpass", 18000, 0.5);
+            const p = panner3d(c);
+            input.connect(lp).connect(p).connect(out);
+            let first = true;
+            return {
+              input,
+              set(t, pos) {
+                rampTo(lp.frequency, airCutoff(Math.hypot(...pos)), t);
+                placePanner(p, pos, t, first);
+                first = false;
+              },
+            };
+          },
+        },
+        {
+          id: "D",
+          name: "Real air",
+          desc: "Air in 3D, and the sound takes time to reach you: far off it lags his wings, and a close pass bends in pitch (Doppler).",
+          make(c, out) {
+            const input = c.createGain();
+            const delay = c.createDelay(1);
+            const lp = biquad(c, "lowpass", 18000, 0.5);
+            const p = panner3d(c);
+            input.connect(delay).connect(lp).connect(p).connect(out);
+            let first = true;
+            return {
+              input,
+              set(t, pos) {
+                const d = Math.hypot(...pos);
+                if (first) delay.delayTime.setValueAtTime(d / 343, t);
+                else rampTo(delay.delayTime, d / 343, t);
+                rampTo(lp.frequency, airCutoff(d), t);
+                placePanner(p, pos, t, first);
+                first = false;
+              },
+            };
+          },
+        },
+        {
+          id: "E",
+          name: "Fjord",
+          desc: "Air in 3D, with the mountains answering: the farther he is, the more you hear his echo off the fjord.",
+          make(c, out) {
+            const input = c.createGain();
+            const lp = biquad(c, "lowpass", 18000, 0.5);
+            const p = panner3d(c);
+            input.connect(lp).connect(p).connect(out);
+            const send = c.createGain();
+            send.gain.value = 0;
+            lp.connect(send);
+            send.connect(echo(c, out, 0.47, 0.4, 0.5));
+            send.connect(hall(c, out, 3, 0.45));
+            let first = true;
+            return {
+              input,
+              set(t, pos) {
+                const d = Math.hypot(...pos);
+                rampTo(lp.frequency, airCutoff(d), t);
+                rampTo(
+                  send.gain,
+                  (0.15 + 0.5 * Math.min(1, d / 35)) * (8 / (8 + d * 0.3)),
+                  t,
+                );
+                placePanner(p, pos, t, first);
+                first = false;
+              },
+            };
+          },
+        },
+      ];
+
+      /**
+       * Times across a sweep, fractions of it, crowded where the light's edge
+       * is crossing the box (its middle half) and thin at either end.
+       */
+      function alongTheEdge(count) {
+        const times = [];
+        for (let i = 0; i < count * 20 && times.length < count; i++) {
+          const u = Math.random();
+          if (Math.random() < Math.sin(Math.PI * u) ** 2)
+            times.push(0.15 + 0.75 * u);
+        }
+        return times;
+      }
+
+      /** One faint crackle, a few milliseconds of static, nudged off the box's pan. */
+      function crackle(c, out, t, peak) {
+        const pan = c.createStereoPanner();
+        pan.pan.value = randomBetween(-0.2, 0.2);
+        pan.connect(out);
+        noise(c, pan, t, {
+          freq: randomBetween(2200, 6500),
+          q: 0.8,
+          peak,
+          attack: 0.001,
+          decay: randomBetween(0.004, 0.016),
+        });
+      }
+
+      /** A soft clap: lower and fuller than a crackle, still very quiet. */
+      function clap(c, out, t, peak) {
+        noise(c, out, t, {
+          freq: randomBetween(1100, 2000),
+          q: 1,
+          peak,
+          attack: 0.002,
+          decay: 0.035,
+        });
+        noise(c, out, t + 0.011, {
+          freq: randomBetween(1600, 2600),
+          q: 1,
+          peak: peak * 0.35,
+          attack: 0.002,
+          decay: 0.03,
+        });
+      }
+
+      const BRUSH = [
+        /* F to J: what the aurora really sounds like, very quiet. Witnesses
+           under strong aurora report faint crackles, claps, hissing and a
+           rustle like silk or dry grass (recorded in Finland by Unto Laine);
+           radio receivers hear its very-low-frequency emissions as rising
+           "chorus" chirps and falling whistlers. Each plays where the light's
+           edge crosses the box. */
+        {
+          id: "F",
+          name: "Auroral crackle",
+          desc: "Sparse, faint crackles of static, irregular as the real thing, gathering where the light's edge crosses the box, and now and then one soft clap.",
+          play(c, out, t, o) {
+            for (const u of alongTheEdge(3 + Math.round(o.dur * 7)))
+              crackle(c, out, t + o.dur * u, randomBetween(0.006, 0.016));
+            if (Math.random() < 0.4)
+              clap(c, out, t + o.dur * randomBetween(0.4, 0.6), 0.012);
+          },
+        },
+        {
+          id: "G",
+          name: "Silk rustle",
+          desc: "The sound people describe most: a faint rustle like silk or dry grass, swelling and fading as the light passes over the box.",
+          play(c, out, t, o) {
+            airStroke(c, out, t, o.dur, {
+              type: "bandpass",
+              lo: o.kind === "header" ? 2400 : 3000,
+              hi: o.kind === "header" ? 4200 : 5200,
+              q: 0.7,
+              peak: 0.035,
+              pow: 2,
+              buffer: crackleBuffer(c),
+            });
+          },
+        },
+        {
+          id: "H",
+          name: "Electrophonic hiss",
+          desc: "A very soft, high hiss that rises and fades with the light, pulsing slightly as pulsating aurora flickers.",
+          play(c, out, t, o) {
+            const src = heldNoise(c, t);
+            const fl = flutter(c, randomBetween(3, 5), 0.4);
+            fl.osc.start(t);
+            const g = c.createGain();
+            g.gain.value = 0;
+            g.gain.setValueCurveAtTime(strokeCurve(2, 0.016), t, o.dur);
+            src
+              .connect(biquad(c, "highpass", 5000, 0.6))
+              .connect(fl.amp)
+              .connect(g)
+              .connect(out);
+            src.stop(t + o.dur + 0.05);
+            fl.osc.stop(t + o.dur + 0.05);
+          },
+        },
+        {
+          id: "I",
+          name: "Natural radio chorus",
+          desc: "The aurora's own radio, as a receiver hears it: a few faint rising chirps, like distant birds, over a whisper of hiss.",
+          play(c, out, t, o) {
+            for (const u of alongTheEdge(2 + Math.round(o.dur * 3))) {
+              const from =
+                randomBetween(1200, 1800) * (o.kind === "header" ? 0.8 : 1);
+              tone(c, out, t + o.dur * u, {
+                freq: from,
+                to: from * randomBetween(1.8, 2.3),
+                peak: 0.006,
+                attack: 0.03,
+                release: randomBetween(0.15, 0.3),
+              });
+            }
+            const hiss = c.createGain();
+            hiss.gain.value = 0;
+            hiss.gain.setValueCurveAtTime(strokeCurve(2, 0.005), t, o.dur);
+            const src = heldNoise(c, t);
+            src
+              .connect(biquad(c, "highpass", 3000, 0.6))
+              .connect(hiss)
+              .connect(out);
+            src.stop(t + o.dur + 0.05);
+          },
+        },
+        {
+          id: "J",
+          name: "Distant whistler",
+          desc: "One slow, falling whistle from far across the sky, like a radio whistler, gliding down as the light crosses, over a breath of hiss.",
+          play(c, out, t, o) {
+            const top =
+              (o.kind === "header" ? 4200 : 5200) * (1 - o.rank * 0.03);
+            tone(c, out, t + o.dur * 0.1, {
+              freq: top,
+              to: top / 4,
+              peak: 0.005,
+              attack: o.dur * 0.2,
+              hold: o.dur * 0.25,
+              release: o.dur * 0.6,
+            });
+            const hiss = c.createGain();
+            hiss.gain.value = 0;
+            hiss.gain.setValueCurveAtTime(strokeCurve(2, 0.004), t, o.dur);
+            const src = heldNoise(c, t);
+            src
+              .connect(biquad(c, "highpass", 4000, 0.6))
+              .connect(hiss)
+              .connect(out);
+            src.stop(t + o.dur + 0.05);
+          },
+        },
+        {
+          id: "K",
+          name: "Under the aurora",
+          desc: "How witnesses usually describe it, both at once: the silk rustle, quieter, with a few faint crackles scattered through it.",
+          play(c, out, t, o) {
+            airStroke(c, out, t, o.dur, {
+              type: "bandpass",
+              lo: o.kind === "header" ? 2400 : 3000,
+              hi: o.kind === "header" ? 4200 : 5200,
+              q: 0.7,
+              peak: 0.022,
+              pow: 2,
+              buffer: crackleBuffer(c),
+            });
+            for (const u of alongTheEdge(2 + Math.round(o.dur * 3)))
+              crackle(c, out, t + o.dur * u, randomBetween(0.005, 0.011));
+          },
+        },
+      ];
+
+      /* ===================================================================
+       * Demo flights. Keys are [flight seconds, x, y, z]: x right, y up,
+       * z into the page, metres from the viewer's eye. Flaps are flight
+       * seconds where he wants to flap; a beat once begun always finishes.
+       * =================================================================== */
+
+      function soarArc() {
+        const keys = [];
+        const n = 12;
+        let t = 0;
+        let last = null;
+        for (let i = 0; i <= n; i++) {
+          const a = ((160 + (220 * i) / n) * Math.PI) / 180;
+          const p = [16 * Math.cos(a), 5 + 0.25 * i, 30 + 16 * Math.sin(a)];
+          if (last)
+            t +=
+              Math.hypot(p[0] - last[0], p[1] - last[1], p[2] - last[2]) / 8.5;
+          keys.push([t, ...p]);
+          last = p;
+        }
+        return keys;
+      }
+
+      const PASS_KEYS = [
+        [0, -20, 2, 11],
+        [1, -11, 1.4, 8.5],
+        [2, -2, 0.8, 7],
+        [3, 7, 1.1, 7.5],
+        [4, 16, 1.8, 9.5],
+        [5, 24, 2.6, 13],
+      ];
+
+      const DEMOS = {
+        pass: {
+          label: "Close pass",
+          keys: PASS_KEYS,
+          flaps: [
+            [0, 1.3],
+            [2.6, 3.6],
+          ],
+          rate: 3.4,
+        },
+        flapping: {
+          label: "Steady flapping",
+          keys: PASS_KEYS,
+          flaps: [[0, 5]],
+          rate: 3.4,
+        },
+        flyin: {
+          label: "Fly-in",
+          keys: [
+            [0, 1.6, 2.6, -1.2],
+            [0.3, 0.9, 1.6, 1],
+            [0.6, 0.1, 0.8, 3.2],
+            [1, -1.2, -0.1, 6.5],
+            [1.6, -3.4, -1, 11.5],
+            [2.6, -7, -1.3, 20],
+            [4, -11, -0.6, 33],
+            [5.6, -15, 0.4, 48],
+            [7, -18, 1, 62],
+          ],
+          flaps: [
+            [0, 1.1],
+            [3, 4],
+          ],
+          rate: 2.85,
+          slowNear: true,
+        },
+        homecoming: {
+          label: "Homecoming",
+          keys: [
+            [0, 14, 5, 70],
+            [1.6, 9, 3.5, 52],
+            [3.2, 5, 2.2, 34],
+            [4.4, 2.2, 1.2, 19],
+            [5.2, 0.8, 0.6, 9],
+            [5.7, 0.2, 0.4, 3.5],
+            [6, -0.6, 0.9, 0.6],
+            [6.3, -1.4, 1.6, -1.5],
+          ],
+          flaps: [
+            [0, 1.2],
+            [3.4, 4.4],
+          ],
+          rate: 3,
+          slowNear: true,
+        },
+        glide: {
+          label: "Glide and dive",
+          keys: [
+            [0, -22, 4, 16],
+            [1, -13, 3.6, 13],
+            [2, -5, 2.2, 11],
+            [2.6, 1, 0.4, 10],
+            [3.2, 8, -0.6, 10.5],
+            [4.2, 17, 0, 12],
+            [5.2, 25, 1, 15],
+          ],
+          flaps: [[0, 0.7]],
+          rate: 3.4,
+        },
+        soar: {
+          label: "Soaring arc",
+          keys: soarArc(),
+          flaps: [[0, 0.8]],
+          rate: 3.4,
+          soar: true,
+        },
+        far: {
+          label: "Far soaring pass",
+          keys: [
+            [0, -45, 8, 50],
+            [2.7, -22, 7, 40],
+            [5.4, 0, 6, 34],
+            [8.1, 22, 7.5, 41],
+            [10.8, 45, 9, 52],
+          ],
+          flaps: [
+            [0, 0.6],
+            [6, 6.8],
+          ],
+          rate: 3.4,
+          soar: true,
+        },
+        roll: {
+          label: "Pass with a roll",
+          keys: [...PASS_KEYS, [6, 31, 3.2, 17]],
+          flaps: [[0, 1]],
+          rate: 3.4,
+          roll: 1.6,
+        },
+      };
+
+      /** Catmull-Rom through the keys, by flight time. */
+      function along(keys, t) {
+        const n = keys.length;
+        if (t <= keys[0][0]) return keys[0].slice(1);
+        if (t >= keys[n - 1][0]) return keys[n - 1].slice(1);
+        const i = keys.findIndex(
+          (k, j) => j < n - 1 && t >= k[0] && t < keys[j + 1][0],
+        );
+        const p0 = keys[Math.max(i - 1, 0)];
+        const p1 = keys[i];
+        const p2 = keys[i + 1];
+        const p3 = keys[Math.min(i + 2, n - 1)];
+        const u = (t - p1[0]) / (p2[0] - p1[0]);
+        const out = [];
+        for (let a = 1; a <= 3; a++)
+          out.push(
+            0.5 *
+              (2 * p1[a] +
+                (-p0[a] + p2[a]) * u +
+                (2 * p0[a] - 5 * p1[a] + 4 * p2[a] - p3[a]) * u * u +
+                (-p0[a] + 3 * p1[a] - 3 * p2[a] + p3[a]) * u * u * u),
+          );
+        return out;
+      }
+
+      const SIM_DT = 1 / 240;
+      const ROLL_SECONDS = 1.3;
+
+      /**
+       * The flight, sampled 240 times a wall-clock second: where he is, his
+       * wing phase (-1 between bouts), how fast time runs for him, and the
+       * beats with their strokes' wall-clock lengths. The sound and the picture
+       * both read this, so they cannot drift apart.
+       */
+      function simulate(demo) {
+        const end = demo.keys[demo.keys.length - 1][0];
+        const samples = [];
+        const beats = [];
+        let tau = 0;
+        let w = 0;
+        let phase = -1;
+        let beat = null;
+        let flapAmount = 0;
+        let soarAmount = demo.soar ? 1 : 0;
+        let rollStart = -1;
+        let rollEnd = -1;
+        for (let i = 0; i < 40000 && tau < end; i++) {
+          const pos = along(demo.keys, tau);
+          const dist = Math.hypot(...pos);
+          const scale = demo.slowNear ? clamp(dist / 12, 0.25, 1) : 1;
+          const intoRoll = demo.roll === undefined ? -1 : tau - demo.roll;
+          const rolling = intoRoll >= 0 && intoRoll < ROLL_SECONDS;
+          if (rolling && rollStart < 0) rollStart = w;
+          if (intoRoll >= ROLL_SECONDS && rollEnd < 0) rollEnd = w;
+          const wants =
+            !rolling && demo.flaps.some(([a, b]) => tau >= a && tau < b);
+          if (phase < 0 && wants) {
+            phase = 0;
+            beat = { w, scale, downW: -1, endW: -1 };
+            beats.push(beat);
+          }
+          const step = demo.rate * scale * SIM_DT;
+          if (phase >= 0) {
+            const next = phase + step;
+            if (phase < DOWN && next >= DOWN)
+              beat.downW = w + ((DOWN - phase) / step) * SIM_DT;
+            if (next >= 1) {
+              const endW = w + ((1 - phase) / step) * SIM_DT;
+              beat.endW = endW;
+              if (wants) {
+                phase = next - 1;
+                beat = { w: endW, scale, downW: -1, endW: -1 };
+                beats.push(beat);
+              } else {
+                phase = -1;
+              }
+            } else {
+              phase = next;
+            }
+          }
+          flapAmount +=
+            ((phase >= 0 ? 1 : 0) - flapAmount) * Math.min(1, SIM_DT / 0.15);
+          soarAmount +=
+            ((demo.soar && phase < 0 ? 1 : 0) - soarAmount) *
+            Math.min(1, SIM_DT / 0.4);
+          const ahead = along(demo.keys, Math.min(end, tau + 0.02));
+          const behind = along(demo.keys, Math.max(0, tau - 0.02));
+          const speed =
+            Math.hypot(
+              ahead[0] - behind[0],
+              ahead[1] - behind[1],
+              ahead[2] - behind[2],
+            ) / 0.04;
+          samples.push({
+            pos,
+            dist,
+            phase,
+            scale,
+            speed: speed || 9,
+            flapAmount,
+            soarAmount,
+            roll: rolling ? rollAngle(intoRoll) : 0,
+            mode: rolling
+              ? "rolling"
+              : phase >= 0
+                ? "flapping"
+                : demo.soar
+                  ? "soaring"
+                  : "gliding",
+          });
+          tau += SIM_DT * scale;
+          w += SIM_DT;
+        }
+        for (const b of beats) {
+          if (b.endW < 0) b.endW = b.w + 1 / (demo.rate * b.scale);
+          if (b.downW < 0) b.downW = b.w + DOWN * (b.endW - b.w);
+        }
+        if (rollStart >= 0 && rollEnd < 0) rollEnd = w;
+        return { samples, beats, length: w, rollStart, rollEnd };
+      }
+
+      /* ===================================================================
+       * Draw-in timelines (seconds from the start): the page's boxes as the
+       * fly-in draws them in. Boxes are fractions of the scene: x, y, w, h.
+       * Durations sit between the site's BRUSH_QUICKEST (0.6 s) and
+       * BRUSH_LONGEST (1 s); cards follow CARD_FOLLOWS (0.6 s) apart, or
+       * RETURN_FOLLOWS (0.3 s) coming back.
+       * =================================================================== */
+
+      const HEADER_BOX = [0.02, 0.03, 0.96, 0.1];
+      const TITLE_BOX = [0.08, 0.2, 0.45, 0.09];
+      const INTRO_BOX = [0.08, 0.31, 0.6, 0.06];
+      const CARD_BOXES = [
+        [0.06, 0.5, 0.27, 0.4],
+        [0.365, 0.5, 0.27, 0.4],
+        [0.67, 0.5, 0.27, 0.4],
+      ];
+
+      const DRAW_INS = {
+        first: {
+          label: "First visit",
+          heading: [0.62, 0.78],
+          boxes: [
+            { box: HEADER_BOX, kind: "header", start: 0.85, dur: 0.8 },
+            { box: TITLE_BOX, kind: "text", start: 1.25, dur: 0.7 },
+            { box: INTRO_BOX, kind: "text", start: 1.5, dur: 0.85 },
+            { box: CARD_BOXES[0], kind: "card", start: 1.95, dur: 0.75 },
+            { box: CARD_BOXES[1], kind: "card", start: 2.55, dur: 0.7 },
+            { box: CARD_BOXES[2], kind: "card", start: 3.15, dur: 0.65 },
+          ],
+        },
+        back: {
+          label: "Coming back",
+          heading: [-0.45, -0.89],
+          header: true,
+          boxes: [
+            { box: TITLE_BOX, kind: "text", start: 0.5, dur: 0.6 },
+            { box: INTRO_BOX, kind: "text", start: 0.8, dur: 0.7 },
+            { box: CARD_BOXES[0], kind: "card", start: 1.1, dur: 0.7 },
+            { box: CARD_BOXES[1], kind: "card", start: 1.4, dur: 0.65 },
+            { box: CARD_BOXES[2], kind: "card", start: 1.7, dur: 0.6 },
+          ],
+        },
+      };
+
+      /* The header press: GitHub, Discord and the Settings gear. Natural and
+         subtle, each a sound a hand makes; S is the GMT docs' Sonar, as the
+         site plays it now, to compare. */
+      const PING = [
+        {
+          id: "A",
+          name: "Soft tap",
+          desc: "A fingertip on a felt-covered key: a short, soft tap with a little warm body, and nothing ringing after it.",
+          play(c, out, t) {
+            noise(c, out, t, {
+              freq: 1800,
+              q: 0.9,
+              peak: 0.06,
+              attack: 0.001,
+              decay: 0.008,
+            });
+            tone(c, out, t, {
+              freq: 240,
+              to: 190,
+              peak: 0.025,
+              attack: 0.002,
+              release: 0.03,
+            });
+          },
+        },
+        {
+          id: "B",
+          name: "Water drop",
+          desc: "One small drop into still water: a quick, round plip that rises a little in pitch and is gone.",
+          play(c, out, t) {
+            tone(c, out, t, {
+              freq: 800,
+              to: 1700,
+              peak: 0.035,
+              attack: 0.002,
+              release: 0.045,
+            });
+          },
+        },
+        {
+          id: "C",
+          name: "Ice tick",
+          desc: "A fingernail tapping thin ice: a tiny, high, glassy tick, very faint.",
+          play(c, out, t) {
+            noise(c, out, t, {
+              type: "highpass",
+              freq: 6000,
+              peak: 0.02,
+              attack: 0.001,
+              decay: 0.004,
+            });
+            tone(c, out, t, {
+              freq: 3100,
+              peak: 0.02,
+              attack: 0.001,
+              release: 0.03,
+            });
+            tone(c, out, t, {
+              freq: 5400,
+              peak: 0.01,
+              attack: 0.001,
+              release: 0.02,
+            });
+          },
+        },
+        {
+          id: "D",
+          name: "Wood knock",
+          desc: "A knuckle on a small block of dry wood: a short, hollow knock, soft and close.",
+          play(c, out, t) {
+            noise(c, out, t, {
+              freq: 900,
+              q: 1.5,
+              peak: 0.03,
+              attack: 0.001,
+              decay: 0.01,
+            });
+            tone(c, out, t, {
+              freq: 520,
+              to: 480,
+              peak: 0.05,
+              attack: 0.001,
+              release: 0.05,
+            });
+            tone(c, out, t, {
+              freq: 1340,
+              peak: 0.02,
+              attack: 0.001,
+              release: 0.025,
+            });
+          },
+        },
+        {
+          id: "E",
+          name: "Muted sonar",
+          desc: "The Sonar idea, much softer: a round, low ping with a gentle start and no echo, as if heard through water.",
+          play(c, out, t) {
+            tone(c, out, t, {
+              freq: 880,
+              peak: 0.04,
+              attack: 0.006,
+              release: 0.12,
+            });
+          },
+        },
+        {
+          id: "F",
+          name: "Snow press",
+          desc: "A fingertip pressed into fresh snow: a tiny, dry crunch with a soft low give under it.",
+          play(c, out, t) {
+            const src = c.createBufferSource();
+            src.buffer = crackleBuffer(c);
+            src.loop = true;
+            src
+              .connect(biquad(c, "bandpass", 2400, 0.8))
+              .connect(envelope(c, t, 0.12, 0.004, 0, 0.035))
+              .connect(out);
+            src.start(t, Math.random() * 0.5);
+            src.stop(t + 0.08);
+            noise(c, out, t, {
+              type: "lowpass",
+              freq: 500,
+              peak: 0.02,
+              attack: 0.003,
+              decay: 0.03,
+            });
+          },
+        },
+        {
+          id: "G",
+          name: "Pebble",
+          desc: "A small pebble set down on stone: two tiny, close clicks, the second a little lower and softer.",
+          play(c, out, t) {
+            noise(c, out, t, {
+              freq: 3200,
+              q: 2,
+              peak: 0.05,
+              attack: 0.001,
+              decay: 0.006,
+            });
+            noise(c, out, t + 0.028, {
+              freq: 2600,
+              q: 2,
+              peak: 0.03,
+              attack: 0.001,
+              decay: 0.006,
+            });
+          },
+        },
+        {
+          id: "S",
+          name: "Sonar (GMT docs)",
+          desc: "What the GMT docs play, to compare: a clean 1180 Hz ping with a quick echo.",
+          play(c, out, t) {
+            tone(c, out, t, {
+              freq: 1180,
+              peak: 0.12,
+              attack: 0.003,
+              release: 0.18,
+            });
+            tone(c, echo(c, out, 0.19, 0.38, 0.32), t, {
+              freq: 1180,
+              peak: 0.1,
+              attack: 0.003,
+              release: 0.14,
+            });
+          },
+        },
+        /* H to O: sonar pings, made softer and more like the real thing: a
+           sine with a gentle start, a long fall, the water around it, and a
+           quiet return. */
+        {
+          id: "H",
+          name: "Deep sonar",
+          desc: "Low and round, a submarine far down: 620 Hz, soft, its tail opening into a dark space of water.",
+          play(c, out, t) {
+            sonarPing(c, out, t, {
+              freq: 620,
+              to: 600,
+              peak: 0.05,
+              release: 0.45,
+              wet: 0.4,
+            });
+          },
+        },
+        {
+          id: "I",
+          name: "Distant sonar",
+          desc: "A ping heard from far off through the water: almost all space, very little of the ping itself.",
+          play(c, out, t) {
+            sonarPing(c, out, t, {
+              freq: 1050,
+              peak: 0.012,
+              attack: 0.01,
+              release: 0.35,
+              wet: 1.2,
+            });
+          },
+        },
+        {
+          id: "J",
+          name: "Sonar chirp",
+          desc: "A short rising chirp that settles into a soft ping, with one faint return a beat later.",
+          play(c, out, t) {
+            tone(c, out, t, {
+              freq: 900,
+              to: 1150,
+              peak: 0.035,
+              attack: 0.003,
+              release: 0.03,
+            });
+            sonarPing(c, out, t + 0.025, {
+              freq: 1150,
+              peak: 0.03,
+              release: 0.18,
+              echoAt: 0.22,
+              echoPeak: 0.008,
+            });
+          },
+        },
+        {
+          id: "K",
+          name: "Submarine ping",
+          desc: "The classic ping, softened: two tones a breath apart beating slowly, a breath of water noise around them, and a faint return.",
+          play(c, out, t) {
+            sonarPing(c, out, t, {
+              freq: 1000,
+              peak: 0.022,
+              attack: 0.005,
+              release: 0.5,
+              echoAt: 0.3,
+              echoPeak: 0.006,
+            });
+            tone(c, out, t, {
+              freq: 1003,
+              peak: 0.022,
+              attack: 0.005,
+              release: 0.5,
+            });
+            noise(c, out, t, {
+              freq: 1000,
+              q: 10,
+              peak: 0.03,
+              attack: 0.005,
+              decay: 0.3,
+            });
+          },
+        },
+        {
+          id: "L",
+          name: "Glass sonar",
+          desc: "A sonar ping struck on ice: a clear tone with a faint glassy overtone, a short tail and a light return.",
+          play(c, out, t) {
+            sonarPing(c, out, t, {
+              freq: 1400,
+              peak: 0.035,
+              release: 0.25,
+              wet: 0.2,
+              echoAt: 0.19,
+              echoPeak: 0.008,
+            });
+            tone(c, out, t, {
+              freq: 3864,
+              peak: 0.006,
+              attack: 0.002,
+              release: 0.08,
+            });
+          },
+        },
+        {
+          id: "M",
+          name: "Sonar tap",
+          desc: "The Sonar's own note, cut to a blip: short, quiet, no tail and no echo.",
+          play(c, out, t) {
+            tone(c, out, t, {
+              freq: 1180,
+              peak: 0.04,
+              attack: 0.002,
+              release: 0.06,
+            });
+          },
+        },
+        {
+          id: "N",
+          name: "Soft return",
+          desc: "A soft ping, then its return off something far away: a little lower, much quieter, as a real echo comes back.",
+          play(c, out, t) {
+            sonarPing(c, out, t, {
+              freq: 760,
+              peak: 0.04,
+              release: 0.25,
+              wet: 0.2,
+              echoAt: 0.28,
+              echoFreq: 745,
+              echoPeak: 0.012,
+            });
+          },
+        },
+        {
+          id: "O",
+          name: "Water ping",
+          desc: "A ping in water: it falls a touch in pitch as it fades, with a tiny bubble of air under it.",
+          play(c, out, t) {
+            sonarPing(c, out, t, {
+              freq: 950,
+              to: 890,
+              peak: 0.04,
+              release: 0.22,
+            });
+            noise(c, out, t, {
+              type: "lowpass",
+              freq: 600,
+              peak: 0.015,
+              attack: 0.003,
+              decay: 0.05,
+            });
+          },
+        },
+      ];
+
+      /**
+       * A sonar ping: a sine with a soft start and a long fall, gliding from
+       * `freq` to `to`; `wet` sends it into the shared space of water, and
+       * `echoAt` (seconds) brings back one quiet return at `echoFreq`.
+       */
+      function sonarPing(c, out, t, o) {
+        const note = {
+          freq: o.freq,
+          to: o.to,
+          peak: o.peak,
+          attack: o.attack ?? 0.004,
+          release: o.release,
+        };
+        tone(c, out, t, note);
+        if (o.wet) {
+          const send = c.createGain();
+          send.gain.value = o.wet;
+          send.connect(space(c));
+          tone(c, send, t, note);
+        }
+        if (o.echoAt) {
+          const back = o.echoFreq ?? o.freq;
+          tone(c, out, t + o.echoAt, {
+            freq: back,
+            to: o.to ? (o.to * back) / o.freq : undefined,
+            peak: o.echoPeak,
+            attack: 0.006,
+            release: o.release * 0.8,
+          });
+        }
+      }
+
+      /** A one-shot step's buttons: one press, and three in quick succession. */
+      const SHOT_PLAYS = {
+        once: { label: "Press", times: [0] },
+        three: { label: "Three presses", times: [0, 0.45, 0.75] },
+      };
+
+      /* ===================================================================
+       * The steps.
+       * =================================================================== */
+
+      const STEPS = [
+        {
+          id: "flap",
+          title: "1 · Wingbeat",
+          where:
+            "Each wingbeat while he flaps: bouts of about 3.4 beats a second, slower and deeper (2.7 to 3) on the fly-in. The sound follows the drawn wing exactly: the downstroke is the first 55% of the beat, the wing fastest halfway down. Played on its own here.",
+          kind: "flight",
+          layer: "flap",
+          variants: FLAP,
+          plays: ["pass", "flapping", "flyin"],
+        },
+        {
+          id: "glide",
+          title: "2 · Glide",
+          where:
+            "Between bouts he glides most of the time, and dives tuck him into speed. Held air that follows his airspeed. Plays with your wingbeat.",
+          kind: "flight",
+          layer: "glide",
+          variants: GLIDE,
+          plays: ["glide", "pass"],
+        },
+        {
+          id: "soar",
+          title: "3 · Soar",
+          where:
+            "Half his passes soar: wings out, fingers and tail spread wide, riding the rising air for 5 to 10 s between short bouts. Takes over from the glide while he soars.",
+          kind: "flight",
+          layer: "soar",
+          variants: SOAR,
+          plays: ["soar", "far"],
+        },
+        {
+          id: "roll",
+          title: "4 · Roll",
+          where:
+            "Now and then, in a glide, he rolls onto his back and over again (1.3 s), as ravens do. Plays with your wingbeat and glide.",
+          kind: "flight",
+          layer: "roll",
+          variants: ROLL,
+          plays: ["roll"],
+        },
+        {
+          id: "slowmo",
+          title: "5 · Slow motion near the camera",
+          where:
+            "Within 12 m, time runs slower for him, down to a quarter speed at 3 m: his wingbeats slow with it, and the sound must keep beat with them. How should the sound itself change? Watch the time readout under the picture.",
+          kind: "flight",
+          layer: "slowmo",
+          variants: SLOWMO,
+          plays: ["flyin", "homecoming"],
+          noNone: true,
+        },
+        {
+          id: "distance",
+          title: "6 · Distance and direction",
+          where:
+            "How far he is and where. Passes run 20 to 65 m away, circles farther out over the horizon, and the fly-in sweeps past within a couple of metres. Plays everything you picked.",
+          kind: "flight",
+          layer: "space",
+          variants: SPACE,
+          plays: ["flyin", "pass", "far"],
+          noNone: true,
+        },
+        {
+          id: "drawin",
+          title: "7 · Aurora draw-in",
+          where:
+            "As his flight reaches each box on the page (the header, the title, the intro, the cards), the aurora's light sweeps across it the way he flies, in 0.6 to 1 s. Each sweep is panned to its box. Coming back, everything but the header sweeps in from the card you came back from. Every variant is very quiet and drawn from the real thing: what people report hearing under strong aurora, and what radio picks up from it. Turn the master up a notch or two.",
+          kind: "brush",
+          variants: BRUSH,
+          plays: ["first", "back"],
+        },
+        {
+          id: "ping",
+          title: "8 · Header press",
+          where:
+            "A press on GitHub, Discord or the Settings gear in the header. The site plays I, Distant sonar; S is the GMT docs' Sonar. A to G are natural, each a sound a hand makes. H to O are sonar pings, made softer and more like the real thing. GitHub and Discord open a new tab, so the sound plays as the page is left.",
+          kind: "shot",
+          variants: PING,
+          plays: ["once", "three"],
+        },
+      ];
+
+      /* ===================================================================
+       * State and playing.
+       * =================================================================== */
+
+      const STORE = "ng-huginn-audition";
+      let picks = {};
+      let index = 0;
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORE) ?? "{}");
+        picks = saved.picks ?? {};
+        index = Math.min(STEPS.length, Math.max(0, saved.index ?? 0));
+      } catch {
+        picks = {};
+      }
+      const hashStep = STEPS.findIndex(
+        (step) => `#${step.id}` === location.hash,
+      );
+      if (hashStep !== -1) index = hashStep;
+      function save() {
+        try {
+          localStorage.setItem(STORE, JSON.stringify({ picks, index }));
+        } catch {
+          /* Private window: picks live for this visit only. */
+        }
+      }
+
+      /** A step's picked variant: null when "none" or not picked yet; `fallback` when not picked. */
+      function picked(stepId, fallback) {
+        const step = STEPS.find((s) => s.id === stepId);
+        const pick = picks[stepId];
+        if (pick === "none") return null;
+        return step.variants.find((v) => v.id === pick) ?? fallback ?? null;
+      }
+
+      /** The voices for a flight: the picks so far, with `layer` swapped for the variant on trial. */
+      function flightVoices(layer, variant) {
+        const voices = {
+          flap: picked("flap"),
+          glide: picked("glide"),
+          soar: picked("soar"),
+          roll: picked("roll"),
+          slowmo: picked("slowmo", SLOWMO[0]) ?? SLOWMO[0],
+          space: picked("distance", SPACE[1]) ?? SPACE[1],
+        };
+        if (layer) voices[layer] = variant;
+        return voices;
+      }
+
+      /** Seconds of the audio clock now leaving the speakers. */
+      function heardTime(c) {
+        try {
+          const ts = c.getOutputTimestamp?.();
+          if (ts && ts.contextTime > 0)
+            return (
+              ts.contextTime + (performance.now() - ts.performanceTime) / 1000
+            );
+        } catch {
+          /* Fall through. */
+        }
+        return c.currentTime - (c.outputLatency || c.baseLatency || 0);
+      }
+
+      /** Schedules the whole flight from its simulation. Returns the stop time. */
+      function scheduleFlight(c, out, t0, plan, v) {
+        const sp = v.space.make(c, out);
+        const end = t0 + plan.length + 0.3;
+        for (const b of plan.beats) {
+          const m = {
+            pitch: v.slowmo.pitch(b.scale),
+            gain: v.slowmo.gain(b.scale),
+          };
+          const down = b.downW - b.w;
+          const up = b.endW - b.downW;
+          v.flap?.beat(c, sp.input, t0 + b.w, down, up, m);
+          const sub = v.slowmo.sub(b.scale);
+          if (v.flap && sub > 0.01)
+            stroke(c, sp.input, t0 + b.w, down, {
+              type: "lowpass",
+              freq: 200,
+              q: 0.7,
+              peak: 0.16 * sub,
+            });
+        }
+        const glide = v.glide?.air(c, sp.input, t0);
+        const soar = v.soar?.air(c, sp.input, t0);
+        const every = 8;
+        for (let i = 0; i < plan.samples.length; i += every) {
+          const s = plan.samples[i];
+          const t = t0 + i * SIM_DT;
+          const pitch = v.slowmo.pitch(s.scale);
+          const gain = v.slowmo.gain(s.scale);
+          const quiet = s.roll ? 0.6 : 1;
+          glide?.set(t, {
+            speed: s.speed,
+            amount: (1 - s.soarAmount) * quiet * gain,
+            pitch,
+          });
+          soar?.set(t, {
+            speed: s.speed,
+            amount: s.soarAmount * quiet * gain,
+            pitch,
+          });
+          sp.set(t, s.pos);
+        }
+        const last = t0 + plan.length;
+        glide?.set(last + 0.2, { speed: 0, amount: 0, pitch: 1 });
+        soar?.set(last + 0.2, { speed: 0, amount: 0, pitch: 1 });
+        glide?.stop(end);
+        soar?.stop(end);
+        if (plan.rollStart >= 0)
+          v.roll?.play(
+            c,
+            sp.input,
+            t0 + plan.rollStart,
+            plan.rollEnd - plan.rollStart,
+          );
+        return end;
+      }
+
+      function scheduleBrushes(c, out, t0, drawIn, voice) {
+        drawIn.boxes.forEach((b, rank) => {
+          const [x, , w] = b.box;
+          const centre = (x + w / 2 - 0.5) * 1.6;
+          const pan = c.createStereoPanner();
+          const t = t0 + b.start;
+          pan.pan.setValueAtTime(
+            clamp(centre - 0.12 * Math.sign(drawIn.heading[0]), -1, 1),
+            t,
+          );
+          rampTo(
+            pan.pan,
+            clamp(centre + 0.12 * Math.sign(drawIn.heading[0]), -1, 1),
+            t + b.dur,
+          );
+          pan.connect(out);
+          voice.play(c, pan, t, { dur: b.dur, kind: b.kind, rank });
+        });
+        return t0 + Math.max(...drawIn.boxes.map((b) => b.start + b.dur)) + 0.8;
+      }
+
+      let current = null;
+      function stopScene() {
+        current?.();
+        current = null;
+        for (const button of document.querySelectorAll(
+          "[data-play][aria-pressed='true']",
+        ))
+          button.setAttribute("aria-pressed", "false");
+      }
+
+      /** Plays a flight and/or a draw-in, and draws them on the scene canvas in step. */
+      function playScene({ flight, voices, drawIn, brush, button }) {
+        stopScene();
+        const c = audio();
+        const t0 = c.currentTime + 0.12;
+        const bus = c.createGain();
+        bus.connect(master);
+        const plan = flight ? simulate(flight) : null;
+        let end = t0;
+        if (plan) end = Math.max(end, scheduleFlight(c, bus, t0, plan, voices));
+        if (drawIn)
+          end = Math.max(
+            end,
+            brush ? scheduleBrushes(c, bus, t0, drawIn, brush) : t0 + 4,
+          );
+        button?.setAttribute("aria-pressed", "true");
+        let raf = requestAnimationFrame(frame);
+        function frame() {
+          const w = heardTime(c) - t0;
+          drawScene(plan, drawIn, w);
+          if (c.currentTime < end + 0.3) raf = requestAnimationFrame(frame);
+          else stopScene();
+        }
+        current = () => {
+          cancelAnimationFrame(raf);
+          bus.gain.setTargetAtTime(0, c.currentTime, 0.04);
+          setTimeout(() => bus.disconnect(), 400);
+          button?.setAttribute("aria-pressed", "false");
+        };
+      }
+
+      /* ===================================================================
+       * The scene: a night sky over a ridge, Huginn drawn from the samples
+       * (his wings at the sampled phase), and the page's boxes as they draw in.
+       * =================================================================== */
+
+      function sceneCanvas() {
+        const canvas = document.getElementById("scene");
+        if (!canvas) return null;
+        const dpr = window.devicePixelRatio || 1;
+        const W = canvas.clientWidth;
+        const H = canvas.clientHeight;
+        if (canvas.width !== Math.round(W * dpr)) {
+          canvas.width = Math.round(W * dpr);
+          canvas.height = Math.round(H * dpr);
+        }
+        const g = canvas.getContext("2d");
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { g, W, H };
+      }
+
+      function seeded(seed) {
+        let s = seed;
+        return function next() {
+          s = (s * 1664525 + 1013904223) % 4294967296;
+          return s / 4294967296;
+        };
+      }
+
+      function drawSky(g, W, H) {
+        const sky = g.createLinearGradient(0, 0, 0, H);
+        sky.addColorStop(0, "#02060a");
+        sky.addColorStop(0.6, "#05141c");
+        sky.addColorStop(1, "#0a2430");
+        g.fillStyle = sky;
+        g.fillRect(0, 0, W, H);
+        const next = seeded(7);
+        g.fillStyle = "rgba(207,234,242,0.7)";
+        for (let i = 0; i < 90; i++)
+          g.fillRect(next() * W, next() * H * 0.7, 1, 1);
+        const glow = g.createLinearGradient(0, H * 0.35, 0, H * 0.8);
+        glow.addColorStop(0, "rgba(34,211,170,0)");
+        glow.addColorStop(1, "rgba(34,211,170,0.08)");
+        g.fillStyle = glow;
+        g.fillRect(0, 0, W, H);
+        g.fillStyle = "#010406";
+        g.beginPath();
+        g.moveTo(0, H);
+        const ridge = seeded(3);
+        for (let i = 0; i <= 24; i++)
+          g.lineTo(
+            (i / 24) * W,
+            H * (0.8 + 0.08 * Math.sin(i * 0.9) + 0.04 * ridge()),
+          );
+        g.lineTo(W, H);
+        g.fill();
+      }
+
+      function drawBird(g, W, H, s) {
+        const [x, y, z] = s.pos;
+        if (z < 0.4) return;
+        const f = H * 1.05;
+        const cx = W / 2 + (f * x) / z;
+        const cy = H * 0.42 - (f * y) / z;
+        const span = Math.min(H * 0.9, (f * 0.62) / z);
+        const rest = s.soarAmount > 0.5 ? 0.14 : 0.08;
+        const beat =
+          s.phase >= 0 ? wingPose(s.phase) : { arm: rest, hand: 0, fold: 0 };
+        const k = smoothstep(s.flapAmount);
+        const arm = rest + (beat.arm - rest) * k;
+        const hand = beat.hand * k;
+        const fold = beat.fold * k;
+        g.save();
+        g.globalAlpha = smoothstep((z - 0.4) / 1.2);
+        g.translate(cx, cy);
+        g.rotate(-s.roll);
+        g.strokeStyle = "#0b0f12";
+        g.fillStyle = "#0b0f12";
+        g.shadowColor = "rgba(191,243,251,0.55)";
+        g.shadowBlur = Math.max(2, span * 0.08);
+        g.lineCap = "round";
+        g.lineJoin = "round";
+        g.lineWidth = Math.max(1.4, span * 0.09);
+        const armLength = span * 0.45;
+        const handLength = span * 0.55 * (1 - 0.35 * fold);
+        for (const side of [1, -1]) {
+          const sx = side * span * 0.05;
+          const wx = sx + side * armLength * Math.cos(arm);
+          const wy = -armLength * Math.sin(arm);
+          const tx = wx + side * handLength * Math.cos(arm + hand);
+          const ty = wy - handLength * Math.sin(arm + hand);
+          g.beginPath();
+          g.moveTo(sx, 0);
+          g.lineTo(wx, wy);
+          g.lineTo(tx, ty);
+          g.stroke();
+        }
+        g.beginPath();
+        g.ellipse(0, span * 0.02, span * 0.07, span * 0.12, 0, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
+      }
+
+      function drawBoxes(g, W, H, drawIn, w) {
+        const [hx, hy] = drawIn.heading;
+        const n = Math.hypot(hx, hy) || 1;
+        const all = drawIn.header
+          ? [
+              { box: HEADER_BOX, kind: "header", start: -10, dur: 0.1 },
+              ...drawIn.boxes,
+            ]
+          : drawIn.boxes;
+        for (const b of all) {
+          const [bx, by, bw, bh] = b.box;
+          const x = bx * W;
+          const y = by * H;
+          const width = bw * W;
+          const height = bh * H;
+          const k = (w - b.start) / b.dur;
+          const shown =
+            w < 0 && b.start >= 0 ? 0 : clamp((k - 0.25) / 0.5, 0, 1);
+          if (shown <= 0) continue;
+          const corners = [
+            [x, y],
+            [x + width, y],
+            [x, y + height],
+            [x + width, y + height],
+          ].map(([cx, cy]) => (cx * hx + cy * hy) / n);
+          const lead = Math.min(...corners);
+          const across = Math.max(...corners) - lead;
+          const start = [(lead * hx) / n, (lead * hy) / n];
+          const grad = g.createLinearGradient(
+            start[0],
+            start[1],
+            start[0] + (across * hx) / n,
+            start[1] + (across * hy) / n,
+          );
+          const edge = Math.min(0.999, shown);
+          grad.addColorStop(0, "rgba(10,26,36,0.85)");
+          grad.addColorStop(Math.max(0, edge - 0.001), "rgba(10,26,36,0.85)");
+          if (shown < 1) {
+            grad.addColorStop(edge, "rgba(120,255,214,0.9)");
+            grad.addColorStop(Math.min(1, edge + 0.06), "rgba(120,255,214,0)");
+          } else {
+            grad.addColorStop(1, "rgba(10,26,36,0.85)");
+          }
+          g.fillStyle = grad;
+          g.fillRect(x, y, width, height);
+          g.strokeStyle = `rgba(34,211,238,${0.6 * shown})`;
+          g.lineWidth = 1;
+          g.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+        }
+      }
+
+      function drawScene(plan, drawIn, w) {
+        const scene = sceneCanvas();
+        if (!scene) return;
+        const { g, W, H } = scene;
+        drawSky(g, W, H);
+        if (drawIn) drawBoxes(g, W, H, drawIn, w);
+        const caption = document.getElementById("caption");
+        if (!plan) return;
+        const i = clamp(Math.floor(w / SIM_DT), 0, plan.samples.length - 1);
+        const s = plan.samples[i];
+        if (w >= 0 && w <= plan.length) drawBird(g, W, H, s);
+        if (caption)
+          caption.textContent =
+            w < 0 || w > plan.length
+              ? ""
+              : `${s.mode} · ${s.dist.toFixed(0)} m${s.scale < 0.999 ? ` · time ×${s.scale.toFixed(2)}` : ""}${
+                  s.pos[2] < 0.4 ? " · behind you" : ""
+                }`;
+      }
+
+      /* ===================================================================
+       * Rendering the steps.
+       * =================================================================== */
+
+      const stepEl = document.getElementById("step");
+      const progressEl = document.getElementById("progress");
+      const backBtn = document.getElementById("back");
+      const nextBtn = document.getElementById("next");
+
+      function playLabel(step, key) {
+        if (step.kind === "shot") return SHOT_PLAYS[key].label;
+        return step.kind === "brush" ? DRAW_INS[key].label : DEMOS[key].label;
+      }
+
+      /** A one-shot played once or as a run of presses. */
+      function playShot(v, key) {
+        stopScene();
+        const c = audio();
+        const t = c.currentTime + 0.01;
+        for (const at of SHOT_PLAYS[key].times) v.play(c, master, t + at);
+      }
+
+      function variantCard(step, v) {
+        const checked = picks[step.id] === v.id ? "checked" : "";
+        const plays = step.plays
+          .map(
+            (key) =>
+              `<button type="button" data-play="${v.id}:${key}" aria-pressed="false">${playLabel(step, key)}</button>`,
+          )
+          .join("");
+        return `<article class="variant">
+          <h3><span class="letter">${v.id}</span>${v.name}</h3>
+          <p>${v.desc}</p>
+          <div class="actions"><span class="plays">${plays}</span>
+            <label class="pick"><input type="radio" name="pick" value="${v.id}" ${checked} />Pick ${v.id}</label>
+          </div>
+        </article>`;
+      }
+
+      function render() {
+        stopScene();
+        progressEl.textContent =
+          index < STEPS.length
+            ? `Step ${index + 1} of ${STEPS.length}`
+            : `Done · ${STEPS.length} steps`;
+        backBtn.disabled = index === 0;
+        nextBtn.disabled = index >= STEPS.length;
+        nextBtn.textContent = index === STEPS.length - 1 ? "Finish" : "Next";
+        if (index >= STEPS.length) return renderSummary();
+        const step = STEPS[index];
+        const noneChecked = picks[step.id] === "none" ? "checked" : "";
+        const none = step.noNone
+          ? ""
+          : `<label class="pick none"><input type="radio" name="pick" value="none" ${noneChecked} />No sound for this</label>`;
+        const scene =
+          step.kind === "shot"
+            ? ""
+            : `<canvas class="scene" id="scene" aria-label="Huginn's flight, drawn in time with the sound"></canvas>
+          <p class="caption" id="caption"></p>`;
+        stepEl.innerHTML = `<h2>${step.title}</h2>
+          <p class="where">${step.where}</p>
+          ${scene}
+          <div class="variants">${step.variants.map((v) => variantCard(step, v)).join("")}</div>
+          ${none}`;
+        drawScene(
+          null,
+          step.kind === "brush" ? DRAW_INS.first : null,
+          step.kind === "brush" ? 99 : 0,
+        );
+        wireStep(step);
+      }
+
+      function wireStep(step) {
+        for (const radio of stepEl.querySelectorAll('input[name="pick"]')) {
+          radio.addEventListener("change", () => {
+            picks[step.id] = radio.value;
+            save();
+          });
+        }
+        for (const button of stepEl.querySelectorAll("[data-play]")) {
+          const [vid, key] = button.dataset.play.split(":");
+          const v = step.variants.find((x) => x.id === vid);
+          button.addEventListener("click", () => {
+            if (step.kind === "shot") return playShot(v, key);
+            if (button.getAttribute("aria-pressed") === "true")
+              return stopScene();
+            if (step.kind === "brush")
+              playScene({ drawIn: DRAW_INS[key], brush: v, button });
+            else
+              playScene({
+                flight: DEMOS[key],
+                voices: flightVoices(step.layer, v),
+                button,
+              });
+          });
+        }
+      }
+
+      function renderSummary() {
+        const out = {};
+        for (const step of STEPS) out[step.id] = picks[step.id] ?? null;
+        const text = JSON.stringify(out, null, 2);
+        const missing = STEPS.filter((s) => !picks[s.id]).map((s) =>
+          s.title.replace(/^\d+ · /, ""),
+        );
+        stepEl.innerHTML = `<h2>Your picks</h2>
+          <p class="where">Hear it all together, then copy this block and paste it back into the planning session.${
+            missing.length
+              ? ` Not picked yet (the first variant stands in): ${missing.join(", ")}.`
+              : ""
+          }</p>
+          <canvas class="scene" id="scene" aria-label="The fly-in and the draw-in, drawn in time with the sound"></canvas>
+          <p class="caption" id="caption"></p>
+          <div class="actions" style="margin-block-end:1rem"><span class="plays">
+            <button type="button" id="all-first" aria-pressed="false">First visit, all together</button>
+            <button type="button" id="all-back" aria-pressed="false">Coming back, all together</button>
+          </span></div>
+          <pre class="picks" id="picks">${text}</pre>
+          <div class="actions"><button type="button" id="copy-picks">Copy picks</button>
+          <button type="button" id="restart">Start again</button></div>`;
+        drawScene(null, DRAW_INS.first, 99);
+        function together(flight, drawIn, button) {
+          if (button.getAttribute("aria-pressed") === "true")
+            return stopScene();
+          const voices = {
+            flap: picked("flap", FLAP[0]),
+            glide: picked("glide", GLIDE[0]),
+            soar: picked("soar", SOAR[0]),
+            roll: picked("roll", ROLL[0]),
+            slowmo: picked("slowmo", SLOWMO[0]) ?? SLOWMO[0],
+            space: picked("distance", SPACE[2]) ?? SPACE[2],
+          };
+          playScene({
+            flight,
+            voices,
+            drawIn,
+            brush: picked("drawin", BRUSH[0]),
+            button,
+          });
+        }
+        const first = document.getElementById("all-first");
+        const back = document.getElementById("all-back");
+        first.addEventListener("click", () =>
+          together(DEMOS.flyin, DRAW_INS.first, first),
+        );
+        back.addEventListener("click", () =>
+          together(DEMOS.homecoming, DRAW_INS.back, back),
+        );
+        document
+          .getElementById("copy-picks")
+          .addEventListener("click", async (event) => {
+            try {
+              await navigator.clipboard.writeText(text);
+              event.target.textContent = "Copied";
+            } catch {
+              const range = document.createRange();
+              range.selectNodeContents(document.getElementById("picks"));
+              const sel = getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+              event.target.textContent = "Selected: press Copy";
+            }
+          });
+        document.getElementById("restart").addEventListener("click", () => {
+          index = 0;
+          save();
+          render();
+        });
+      }
+
+      backBtn.addEventListener("click", () => {
+        index = Math.max(0, index - 1);
+        save();
+        render();
+      });
+      nextBtn.addEventListener("click", () => {
+        index = Math.min(STEPS.length, index + 1);
+        save();
+        render();
+      });
+      document.getElementById("stop-all").addEventListener("click", stopScene);
+      const masterInput = document.getElementById("master");
+      const masterOut = document.getElementById("master-out");
+      masterInput.addEventListener("input", () => {
+        setMasterLevel(Number(masterInput.value));
+        masterOut.textContent = masterInput.value;
+      });
+      window.addEventListener("resize", () => {
+        if (!current) render();
+      });
+      render();
+    </script>
+  </body>
+</html>

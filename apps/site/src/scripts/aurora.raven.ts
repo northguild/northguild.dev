@@ -1530,6 +1530,21 @@ function homecoming(view: RavenView): Path {
  * "return", the homecoming. */
 export type FlyIn = "first" | "return";
 
+/**
+ * A sound his flight made during a step, for the page to play in time with
+ * the drawn wing (scripts/sound/huginn.ts). `ago` is how many seconds of real
+ * time before the end of the step it happened.
+ * - beat: the downstroke from phase `from` on (0 at the top of the beat), the
+ *   wing turning at `rate` beats a second of real time, while his time runs
+ *   at `scale` of real time.
+ * - rest: the last beat reached the glide pose; the wing stops there.
+ * - roll: he rolls onto his back and over again, over `seconds`.
+ */
+export type RavenSound =
+  | { kind: "beat"; ago: number; from: number; rate: number; scale: number }
+  | { kind: "rest"; ago: number }
+  | { kind: "roll"; ago: number; seconds: number };
+
 export type Raven = {
   /** Fly on by dt seconds, planning a new flight in this view when one is
    * due. */
@@ -1554,6 +1569,13 @@ export type Raven = {
   count: number;
   /** How much of the bird shows, fading in and out at a flight's ends. */
   alpha: number;
+  /** The sounds of the last step, in the order they happened. */
+  sounds: RavenSound[];
+  /** His airspeed, m/s; how much he is soaring, 0 to 1; and how fast time
+   * runs for him, 1 but near the camera. */
+  speed: number;
+  soaring: number;
+  timeScale: number;
 };
 
 export function raven(
@@ -1598,6 +1620,10 @@ export function raven(
     flight: null,
     flown: 0,
     position: [0, 0, 0],
+    sounds: [],
+    speed: 0,
+    soaring: 0,
+    timeScale: 1,
     reset(next) {
       path = null;
       bird.flight = null;
@@ -1610,6 +1636,7 @@ export function raven(
       entranceDue = true;
     },
     step(dt, view) {
+      bird.sounds.length = 0;
       if (!path) {
         wait -= dt;
         if (wait > 0) return;
@@ -1649,8 +1676,22 @@ export function raven(
         rolled = false;
         rollT = -1;
         up = null;
+        // A flight that sets off flapping is heard from its first stroke.
+        if (flapTarget > 0) {
+          const k = timeScaleAt(path, 0);
+          bird.sounds.push({
+            kind: "beat",
+            ago: 0,
+            from: phase,
+            rate: rate * k,
+            scale: k,
+          });
+        }
       }
-      dt *= timeScaleAt(path, s);
+      // Real time, then his: slower near the camera.
+      const wall = dt;
+      const timeScale = timeScaleAt(path, s);
+      dt *= timeScale;
       const speed = speedAt(path, s);
       s += speed * dt;
       if (s >= path.length) return bird.reset();
@@ -1687,7 +1728,11 @@ export function raven(
       // Rolling onto its back and over again, once, in a glide.
       if (!rolled && path.rollAt >= 0 && s >= path.rollAt) {
         wantFlap = false;
-        if (flap === 0 && rollT < 0) rollT = 0;
+        if (flap === 0 && rollT < 0) {
+          rollT = 0;
+          // Over and back takes 1.3 s of his time.
+          bird.sounds.push({ kind: "roll", ago: 0, seconds: 1.3 / timeScale });
+        }
       }
       let roll = 0;
       if (rollT >= 0) {
@@ -1734,21 +1779,53 @@ export function raven(
       }
       if (fwd[1] < -0.07) flapping = false;
       if (flapping && flap === 0) phase = LEVEL_PHASE;
+      // A bout setting off, or taking up again before the wing had settled:
+      // the rest of this downstroke is heard.
+      if (flapping && flapTarget === 0) {
+        bird.sounds.push({
+          kind: "beat",
+          ago: 0,
+          from: phase,
+          rate: rate * timeScale,
+          scale: timeScale,
+        });
+      }
       if (flapping) flapTarget = 1;
       // Once the last beat reaches the glide pose, hold it there and ease out.
       if (flap > 0 && flapTarget > 0) {
         const last = phase;
-        phase = (phase + rate * dt) % 1;
+        const turned = rate * dt;
+        phase = (phase + turned) % 1;
         const passed =
           last <= phase
             ? last < LEVEL_PHASE && phase >= LEVEL_PHASE
             : last < LEVEL_PHASE || phase >= LEVEL_PHASE;
-        if (!flapping && passed) flapTarget = 0;
+        // Over the top: a new downstroke, heard from the moment the wing
+        // turned, part way through this step.
+        if (phase < last) {
+          bird.sounds.push({
+            kind: "beat",
+            ago: (phase / turned) * wall,
+            from: 0,
+            rate: rate * timeScale,
+            scale: timeScale,
+          });
+        }
+        if (!flapping && passed) {
+          flapTarget = 0;
+          bird.sounds.push({
+            kind: "rest",
+            ago: (((phase - LEVEL_PHASE + 1) % 1) / turned) * wall,
+          });
+        }
       }
       flap =
         flapTarget > flap
           ? Math.min(1, flap + dt / 0.15)
           : Math.max(0, flap - dt / 0.12);
+      bird.speed = speed;
+      bird.soaring = path.soar ? 1 - flap : 0;
+      bird.timeScale = timeScale;
 
       let rest = path.soar ? SOAR : GLIDE;
       const tuck = Math.max(

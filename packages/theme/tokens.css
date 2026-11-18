@@ -468,3 +468,24 @@
   font-display: swap;
   src: url("./fonts/michroma-latin-400-normal.woff2") format("woff2");
 }
+
+/*
+ * Source: apps/dox/src/styles/gmt-tokens.css lines 119-127, 329-330, 361-362
+ * (gmt commit 458860e7730d714b90c63768d9e9758dd1025c01).
+ * The Settings panel's shape, its sheen and its motion.
+ */
+:root {
+  --gmt-ease-sweep: cubic-bezier(0.25, 0.6, 0.2, 1);
+  --gmt-sheen: linear-gradient(
+    105deg,
+    transparent 38%,
+    color-mix(in oklab, var(--gmt-ice-bright) 10%, transparent) 45%,
+    color-mix(in oklab, var(--gmt-ice-bright) 24%, transparent) 50%,
+    color-mix(in oklab, var(--gmt-ice-bright) 10%, transparent) 55%,
+    transparent 62%
+  );
+  --gmt-target-min: 24px;
+  --gmt-motion-fast: var(--gmt-duration-fast);
+  --gmt-bevel-md: 10px;
+  --gmt-bevel-sm: 6px;
+}

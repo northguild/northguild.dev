@@ -26,24 +26,109 @@ const links = [
   data-ng-target={entrance ? "header" : undefined}
 >
   <div class="wordmark"><NorthGuildMark />NorthGuild</div>
-  <nav aria-label="NorthGuild community">
-    {
-      links.map((l) => (
-        <a
-          class="gmt-icon-button gmt-sonar-focus"
-          href={l.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`${l.label} (opens in a new tab)`}
+  <div class="actions">
+    <nav aria-label="NorthGuild community">
+      {
+        links.map((l) => (
+          <a
+            class="gmt-icon-button gmt-sonar-focus"
+            href={l.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${l.label} (opens in a new tab)`}
+            title={l.label}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+              <path d={l.path} />
+            </svg>
+          </a>
+        ))
+      }
+    </nav>
+    {/* The Settings gear, last in the bar as on the GMT docs, and its panel:
+        the mute button beside the volume fader. scripts/sound/control.ts
+        wires them; Base.astro sets `data-sound` before first paint so the
+        speaker is drawn right from the first frame. */}
+    <button
+      type="button"
+      class="gmt-icon-button gmt-sonar-focus settings-button"
+      popovertarget="ng-settings"
+      aria-label="Settings"
+      aria-expanded="false"
+      title="Settings"
+    >
+      {/* Lucide's `settings` gear (ISC), filled, its view box cropped so it
+          stands as tall as GitHub's mark; the hub is cut out by even-odd. */}
+      <svg
+        viewBox="1 1 22 22"
+        fill="currentColor"
+        fill-rule="evenodd"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path
+          d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915ZM15 12a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"
+        ></path>
+      </svg>
+    </button>
+    <div
+      id="ng-settings"
+      class="gmt-panel settings-panel"
+      popover
+      role="group"
+      aria-label="Settings"
+    >
+      <div class="sound">
+      <button
+        type="button"
+        id="ng-sound-mute"
+        class="gmt-toggle-button mute"
+        aria-label="Mute sound"
+        aria-pressed="true"
+        data-cue
+      >
+        <svg
+          class="speaker"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
-            <path d={l.path} />
-          </svg>
-        </a>
-      ))
-    }
-  </nav>
+          <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"></path>
+          <path data-slash d="M16 9.5l5 5M21 9.5l-5 5"></path>
+          <path data-waves d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"></path>
+        </svg>
+      </button>
+      <input
+        type="range"
+        id="ng-sound-fader"
+        class="gmt-fader"
+        min="1"
+        max="11"
+        step="1"
+        value="5"
+        aria-label="Volume"
+        aria-valuetext="Volume 5 of 11, muted"
+        style="--gmt-range-pct: 40"
+      />
+      </div>
+    </div>
+  </div>
 </header>
+
+<script>
+  import { startCue } from "../scripts/sound/cue";
+  import { mountSoundControl } from "../scripts/sound/control";
+
+  mountSoundControl();
+  startCue();
+</script>
 
 <style>
   /* A light frost: what is behind (stars, constellation lines) shows through
@@ -77,19 +162,80 @@ const links = [
     color: var(--gmt-ice);
     letter-spacing: 0.04em;
   }
+  /* GitHub, Discord and the gear: one gap between all three, as on the docs. */
+  .actions,
   nav {
     display: flex;
+    align-items: center;
     gap: 1rem;
   }
   /* The icons in the shield's quiet ice rather than the theme's cyan: grey
-     at rest, ice on hover or focus. The focus ring and its sonar ping stay
-     the theme's. */
+     at rest, ice on hover or focus, and the gear while its panel is open.
+     The focus ring and its ping stay the theme's. */
   .gmt-icon-button {
     color: var(--gmt-ice-dim);
     text-decoration: none;
   }
+  /* A button does not take the page's font size, and the icon buttons are
+     sized in em: without this the gear is smaller than GitHub and Discord. */
+  .settings-button {
+    font: inherit;
+  }
   .gmt-icon-button:hover,
-  .gmt-icon-button:focus-visible {
+  .gmt-icon-button:focus-visible,
+  .settings-button:has(+ .settings-panel:popover-open) {
     color: var(--gmt-ice);
+  }
+
+  /* The panel: the speaker beside a fader that fills the rest, in the top
+     layer under the gear, so opening it and dragging the fader move nothing
+     in the bar. Fixed insets are the fallback where anchor positioning is
+     missing: under the bar's right end. */
+  .settings-panel {
+    inline-size: min(16rem, calc(100vw - 2rem));
+    inset: auto;
+    inset-block-start: calc(3.5rem + 0.25rem);
+    inset-inline-end: 16px;
+  }
+  /* The speaker beside the fader, in their own grid: the panel itself keeps
+     its own display, so its layout holds while it fades out on close. */
+  .sound {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .mute {
+    inline-size: 2rem;
+    block-size: 2rem;
+  }
+  .mute svg {
+    inline-size: 20px;
+    block-size: 20px;
+  }
+  .settings-panel .gmt-fader {
+    inline-size: 100%;
+  }
+  /* The speaker reads `data-sound` on <html>, set before first paint, so a
+     muted visitor never sees it on. */
+  :global(:root[data-sound="off"]) .speaker [data-waves],
+  :global(:root:not([data-sound="off"])) .speaker [data-slash] {
+    display: none;
+  }
+
+  @supports (position-area: bottom) {
+    .settings-button {
+      anchor-name: --ng-settings;
+    }
+    /* Right-aligned to the gear where it fits; on a narrow bar, where that
+       would cross the 1rem gutter, centred under it instead. */
+    .settings-panel {
+      position-anchor: --ng-settings;
+      position-area: bottom span-left;
+      position-try-fallbacks: bottom;
+      inset: auto;
+      margin-block-start: 0.25rem;
+      margin-inline-start: 1rem;
+    }
   }
 </style>
