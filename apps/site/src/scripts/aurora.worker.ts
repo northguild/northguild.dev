@@ -37,6 +37,7 @@ import {
   raven,
   type FlyIn,
   type Raven,
+  type RavenSound,
   type ScreenBox,
 } from "./aurora.raven";
 import { SITES, type Site } from "./aurora.sites";
@@ -140,7 +141,32 @@ export type AuroraMessage =
   | { type: "drop" }
   /** Whether the page wants the sun and moon times (the popover is open or
    * about to be). */
-  | { type: "times"; want: boolean };
+  | { type: "times"; want: boolean }
+  /** Whether the reader has sound on: only then are Huginn's sounds posted. */
+  | { type: "sound"; on: boolean };
+
+/**
+ * One of Huginn's sounds, for the page to play in time with the drawn bird
+ * (scripts/sound/huginn.ts). `at` is the wall-clock moment it happened, ms
+ * (`performance.timeOrigin` plus the frame's stamp), so the page can put it
+ * on its audio clock. Beat, rest and roll are as in aurora.raven.ts. "air" is
+ * his place in the camera's frame (metres: x right, y up, z ahead), airspeed,
+ * soaring, time scale and how much of him shows; "gone", the flight's end.
+ */
+export type HuginnSound =
+  | { kind: "beat"; at: number; from: number; rate: number; scale: number }
+  | { kind: "rest"; at: number }
+  | { kind: "roll"; at: number; seconds: number }
+  | {
+      kind: "air";
+      at: number;
+      pos: [number, number, number];
+      speed: number;
+      soar: number;
+      scale: number;
+      alpha: number;
+    }
+  | { kind: "gone"; at: number };
 
 /** A box on the page in CSS pixels: left, top, width, height. */
 export type PageBox = [number, number, number, number];
@@ -185,7 +211,9 @@ export type WorkerMessage =
    * -1 paints them all in, as there will be no fly-in. */
   | { brush: number; angle?: number; duration?: number }
   /** When the sun and moon next show in this window, per site in SITES order. */
-  | { times: SiteTimes[]; zone: string };
+  | { times: SiteTimes[]; zone: string }
+  /** One of Huginn's sounds, while the page has sound on. */
+  | { huginn: HuginnSound };
 
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<AuroraMessage>) => void) | null;
@@ -1519,6 +1547,73 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
   function stopLoop(): void {
     cancelFrame(raf);
     raf = 0;
+    hushHuginn();
+  }
+
+  // Huginn's sounds for the page (scripts/sound/huginn.ts), only while the
+  // reader has sound on: each beat, rest and roll as it happens, and his place
+  // and speed about 15 times a second while he flies, each stamped with the
+  // wall-clock moment it happened.
+  let soundOn = false;
+  let flying = false;
+  let airPostedAt = -Infinity;
+  const AIR_EVERY_MS = 66;
+  /** A sound from his last step, at the moment it happened. */
+  function soundAt(sound: RavenSound, end: number): HuginnSound {
+    const at = end - sound.ago * 1000;
+    if (sound.kind === "beat") {
+      const { from, rate, scale } = sound;
+      return { kind: "beat", at, from, rate, scale };
+    }
+    if (sound.kind === "roll")
+      return { kind: "roll", at, seconds: sound.seconds };
+    return { kind: "rest", at };
+  }
+  function postHuginnSounds(stamp: number): void {
+    const end = performance.timeOrigin + stamp;
+    for (const sound of bird.sounds) {
+      scope.postMessage({ huginn: soundAt(sound, end) });
+    }
+    if (!bird.flight) {
+      hushHuginn();
+      return;
+    }
+    flying = true;
+    if (stamp - airPostedAt < AIR_EVERY_MS) return;
+    airPostedAt = stamp;
+    // His place in the camera's frame: the rows of `cam` are its right, up
+    // and forward, and the eye is at the origin.
+    const [x, y, z] = bird.position;
+    const pos: [number, number, number] = [
+      x * cam[0]! + y * cam[1]! + z * cam[2]!,
+      x * cam[3]! + y * cam[4]! + z * cam[5]!,
+      x * cam[6]! + y * cam[7]! + z * cam[8]!,
+    ];
+    scope.postMessage({
+      huginn: {
+        kind: "air",
+        at: end,
+        pos,
+        speed: bird.speed,
+        soar: bird.soaring,
+        scale: bird.timeScale,
+        alpha: bird.alpha,
+      },
+    });
+  }
+  /** His flight is over, or will not go on for now: the page lets his air go. */
+  function hushHuginn(): void {
+    if (!flying) return;
+    flying = false;
+    airPostedAt = -Infinity;
+    if (soundOn) {
+      scope.postMessage({
+        huginn: {
+          kind: "gone",
+          at: performance.timeOrigin + performance.now(),
+        },
+      });
+    }
   }
 
   function giveUp(): void {
@@ -1580,6 +1675,7 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       const flight = bird.flight;
       bird.step(dt, currentRavenView());
       planned = !!bird.flight && bird.flight !== flight;
+      if (soundOn) postHuginnSounds(stamp);
       paintInWake(dt);
       adaptQuality(elapsed);
     }
@@ -1681,6 +1777,11 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       if (data.want === wantTimes) return;
       wantTimes = data.want;
       updateTimes();
+    } else if (data.type === "sound") {
+      // Muting ends his flight for the page too, so his held air lets go
+      // and cannot come back in an empty sky when sound returns.
+      if (!data.on) hushHuginn();
+      soundOn = data.on;
     }
   };
 }

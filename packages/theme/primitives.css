@@ -311,6 +311,278 @@
 }
 
 
+/*
+ * Source: apps/dox/src/styles/gmt-primitives.css lines 484-551 (native panels),
+ * apps/dox/src/widgets/primitives/range/range.module.css (the fader) and
+ * apps/dox/src/widgets/builders/button.module.css (the pressed button)
+ * (gmt commit 458860e7730d714b90c63768d9e9758dd1025c01). Made classes here
+ * where the docs use CSS modules.
+ */
+
+/* ---- Panel ----
+ * A popover panel: bevelled, on the raised surface, coming and going with a
+ * short move and a fade over 240 ms on the sweep curve, one band of ice
+ * light crossing it each way. Put it on a `[popover]`. Closing keeps it shown,
+ * and in the top layer, until the fade ends. `--gmt-panel-from` is where it
+ * comes from, half a rem above by default.
+ */
+.gmt-panel {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--gmt-border);
+  border-radius: var(--gmt-bevel-md);
+  corner-shape: bevel;
+  background: var(--gmt-surface-2);
+  color: var(--gmt-ice);
+  font-size: var(--gmt-text-sm);
+  overflow: visible;
+  opacity: 0;
+  translate: var(--gmt-panel-from, 0 -0.5rem);
+  transition:
+    opacity var(--gmt-duration-med) var(--gmt-ease-sweep),
+    translate var(--gmt-duration-med) var(--gmt-ease-sweep),
+    display var(--gmt-duration-med) allow-discrete,
+    overlay var(--gmt-duration-med) allow-discrete;
+}
+
+/* The sheen, over the content and never in the way of a press. Closed, the
+   animation has another name, so each open and each close starts it again. */
+.gmt-panel::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  corner-shape: inherit;
+  content: "";
+  pointer-events: none;
+  background-image: var(--gmt-sheen);
+  background-repeat: no-repeat;
+  background-size: 250% 100%;
+  background-position: 110% 0;
+  animation: gmt-panel-sheen-out var(--gmt-duration-med) ease-in-out;
+}
+
+.gmt-panel:popover-open {
+  opacity: 1;
+  translate: 0 0;
+}
+
+@starting-style {
+  .gmt-panel:popover-open {
+    opacity: 0;
+    translate: var(--gmt-panel-from, 0 -0.5rem);
+  }
+}
+
+.gmt-panel:popover-open::after {
+  animation-name: gmt-panel-sheen;
+}
+
+@keyframes gmt-panel-sheen {
+  from {
+    background-position: -10% 0;
+  }
+}
+
+@keyframes gmt-panel-sheen-out {
+  from {
+    background-position: -10% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gmt-panel {
+    --gmt-panel-from: 0 0;
+  }
+  .gmt-panel::after {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active), (prefers-contrast: more) {
+  .gmt-panel::after {
+    display: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .gmt-panel {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}
+
+/* ---- Toggle button ----
+ * A small bevelled button that holds a state (`aria-pressed`), lit while
+ * pressed. Sized by the caller; an icon alone sits centred.
+ */
+.gmt-toggle-button {
+  appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--gmt-target-min);
+  min-block-size: var(--gmt-target-min);
+  padding: 0;
+  border: 1px solid var(--gmt-hairline);
+  border-radius: var(--gmt-radius-sm);
+  corner-shape: bevel;
+  background-color: var(--gmt-surface-2);
+  color: var(--gmt-ice);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--gmt-motion-fast) var(--gmt-easing),
+    border-color var(--gmt-motion-fast) var(--gmt-easing);
+}
+
+.gmt-toggle-button:hover {
+  border-color: var(--gmt-cyan);
+}
+
+.gmt-toggle-button:focus-visible {
+  outline: 2px solid var(--gmt-cyan);
+  outline-offset: 2px;
+}
+
+.gmt-toggle-button[aria-pressed="true"] {
+  border-color: var(--gmt-cyan);
+  background-color: color-mix(in srgb, var(--gmt-cyan) 22%, var(--gmt-surface-2));
+}
+
+@media (forced-colors: active) {
+  .gmt-toggle-button {
+    border-color: ButtonText;
+    background-color: ButtonFace;
+    color: ButtonText;
+  }
+  .gmt-toggle-button[aria-pressed="true"] {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}
+
+/* ---- Fader ----
+ * A volume fader on a native `<input type="range">` of 11 steps: bevelled ice
+ * notches, a square bevelled thumb. The notches and the fill share one
+ * coordinate system, the track less one thumb, so each notch sits where the
+ * thumb's centre stops. The page sets `--gmt-range-pct` (0 to 100) to fill it.
+ */
+.gmt-fader {
+  --fader-thumb-w: 0.875rem;
+  --fader-thumb-h: 1.5rem;
+  --fader-track-h: 0.75rem;
+  --fader-span: calc(100% - var(--fader-thumb-w) + 1px);
+  --fader-notches: repeating-linear-gradient(
+    to right,
+    color-mix(in srgb, var(--gmt-ice) 55%, transparent) 0 1px,
+    transparent 1px calc((100% - 1px) / 10)
+  );
+  --fader-fill: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--gmt-cyan) 55%, transparent)
+      calc(var(--gmt-range-pct, 0) * 1%),
+    transparent 0
+  );
+
+  appearance: none;
+  margin: 0;
+  inline-size: 8rem;
+  block-size: var(--fader-thumb-h);
+  min-block-size: var(--gmt-target-min);
+  background: transparent;
+  cursor: pointer;
+}
+
+.gmt-fader:focus-visible {
+  outline: 2px solid var(--gmt-cyan);
+  outline-offset: 2px;
+}
+
+.gmt-fader::-webkit-slider-runnable-track {
+  box-sizing: border-box;
+  block-size: var(--fader-track-h);
+  border: 1px solid var(--gmt-border);
+  border-radius: var(--gmt-bevel-sm);
+  corner-shape: bevel;
+  background-color: color-mix(in srgb, var(--gmt-ice) 14%, transparent);
+  background-image: var(--fader-notches), var(--fader-fill);
+  background-size: var(--fader-span) 100%;
+  background-position: calc(var(--fader-thumb-w) / 2 - 0.5px) 0;
+  background-repeat: no-repeat;
+}
+
+.gmt-fader::-webkit-slider-thumb {
+  appearance: none;
+  box-sizing: border-box;
+  inline-size: var(--fader-thumb-w);
+  block-size: var(--fader-thumb-h);
+  translate: 0 calc((var(--fader-track-h) - var(--fader-thumb-h)) / 2 - 1px);
+  border: 1px solid var(--gmt-border);
+  border-radius: var(--gmt-bevel-sm);
+  corner-shape: bevel;
+  background: var(--gmt-ice);
+}
+
+.gmt-fader::-moz-range-track {
+  box-sizing: border-box;
+  block-size: var(--fader-track-h);
+  border: 1px solid var(--gmt-border);
+  border-radius: var(--gmt-bevel-sm);
+  corner-shape: bevel;
+  background-color: color-mix(in srgb, var(--gmt-ice) 14%, transparent);
+  background-image: var(--fader-notches), var(--fader-fill);
+  background-size: var(--fader-span) 100%;
+  background-position: calc(var(--fader-thumb-w) / 2 - 0.5px) 0;
+  background-repeat: no-repeat;
+}
+
+.gmt-fader::-moz-range-progress {
+  background: transparent;
+}
+
+.gmt-fader::-moz-range-thumb {
+  box-sizing: border-box;
+  inline-size: var(--fader-thumb-w);
+  block-size: var(--fader-thumb-h);
+  border: 1px solid var(--gmt-border);
+  border-radius: var(--gmt-bevel-sm);
+  corner-shape: bevel;
+  background: var(--gmt-ice);
+}
+
+@media (forced-colors: active) {
+  .gmt-fader {
+    --fader-notches: repeating-linear-gradient(
+      to right,
+      ButtonText 0 1px,
+      transparent 1px calc((100% - 1px) / 10)
+    );
+    --fader-fill: linear-gradient(
+      to right,
+      Highlight calc(var(--gmt-range-pct, 0) * 1%),
+      transparent 0
+    );
+  }
+  .gmt-fader::-webkit-slider-runnable-track {
+    border-color: ButtonText;
+    background-color: ButtonFace;
+  }
+  .gmt-fader::-moz-range-track {
+    border-color: ButtonText;
+    background-color: ButtonFace;
+  }
+  .gmt-fader::-webkit-slider-thumb {
+    border-color: ButtonText;
+    background: Highlight;
+  }
+  .gmt-fader::-moz-range-thumb {
+    border-color: ButtonText;
+    background: Highlight;
+  }
+}
 
 /* Reduced motion ---- */
 @media (prefers-reduced-motion: reduce) {
