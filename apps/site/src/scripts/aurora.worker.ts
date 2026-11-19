@@ -1778,9 +1778,10 @@ function start(init: Extract<AuroraMessage, { type: "init" }>): void {
       wantTimes = data.want;
       updateTimes();
     } else if (data.type === "sound") {
+      // Muting ends his flight for the page too, so his held air lets go
+      // and cannot come back in an empty sky when sound returns.
+      if (!data.on) hushHuginn();
       soundOn = data.on;
-      // Muted, the page's engine fades out by itself: nothing more to say.
-      if (!soundOn) flying = false;
     }
   };
 }

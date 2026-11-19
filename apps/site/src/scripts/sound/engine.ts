@@ -169,9 +169,16 @@ export function createEngine(): Engine {
   }
 
   function onHuginn(event: Event): void {
+    const sound = (event as CustomEvent<HuginnSound>).detail;
+    // His flight's end is heard even while muted or suspended, so his held
+    // air never outlives him.
+    if (sound.kind === "gone") {
+      huginn?.hear(sound);
+      return;
+    }
     if (!ctx || !master || settings.muted || ctx.state !== "running") return;
     huginn ??= huginnVoice(ctx, master);
-    huginn.hear((event as CustomEvent<HuginnSound>).detail);
+    huginn.hear(sound);
   }
 
   function onVisibility(): void {

@@ -470,12 +470,13 @@
 }
 
 /*
- * Source: apps/dox/src/styles/gmt-tokens.css lines 119-127, 329-330, 361-362
+ * Source: apps/dox/src/styles/gmt-tokens.css lines 117, 119-127, 329-330, 361-362
  * (gmt commit 458860e7730d714b90c63768d9e9758dd1025c01).
  * The Settings panel's shape, its sheen and its motion.
  */
 :root {
   --gmt-ease-sweep: cubic-bezier(0.25, 0.6, 0.2, 1);
+  --gmt-ice-bright: #e6f6ff;
   --gmt-sheen: linear-gradient(
     105deg,
     transparent 38%,
