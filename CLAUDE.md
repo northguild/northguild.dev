@@ -34,4 +34,6 @@ and rewriting published history have to be asked for by name.
 - Colours come from `@northguild/theme` tokens. Amber is not used here.
 - `apps/site` must not extend `tsconfig.base.json`; it extends `astro/tsconfigs/strict`.
 - One `robots.txt` serves the whole host, including `/gmt/`. Keep every existing line,
-  `Content-Signal` included. Add a line only for a new sitemap or a path crawlers should skip.
+  `Content-Signal` included. The `Googlebot`/`Bingbot` group repeats every `*` rule and the
+  `Content-Signal` line, because a crawler with its own group ignores `*`; a change to one group
+  is made to both.

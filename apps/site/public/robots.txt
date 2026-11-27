@@ -1,9 +1,21 @@
 User-agent: *
+User-agent: Applebot
 Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
 Disallow: /api/
 Disallow: /mcp/
 Disallow: /gmt/api/
+
+User-agent: Googlebot
+User-agent: Bingbot
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+Disallow: /api/
+Disallow: /mcp/
+Disallow: /gmt/api/
+Disallow: /gmt/*.md$
+Disallow: /gmt/?
+Disallow: /gmt/*/?
 
 Sitemap: https://northguild.dev/sitemap-index.xml
 Sitemap: https://northguild.dev/gmt/sitemap-index.xml
